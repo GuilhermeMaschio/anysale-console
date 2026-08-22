@@ -31,3 +31,36 @@
 .ai-usage span, .ai-usage small { color: #6c7890; font-size: .78rem; }
 .ai-usage strong { color: #202b45; font-size: 1.45rem; }
 @media (max-width: 850px) { .ai-grid { grid-template-columns: 1fr; } }
+
+/* Lead details open as a modal so the Kanban keeps the full workspace. */
+.workspace-grid { grid-template-columns: minmax(0, 1fr); }
+.detail-panel {
+  position: fixed;
+  z-index: 60;
+  top: 50%;
+  left: 50%;
+  width: min(920px, calc(100vw - 48px));
+  max-width: none;
+  max-height: calc(100vh - 48px);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, calc(-50% + 22px)) scale(.98);
+  transition: transform .22s ease, opacity .22s ease, visibility .22s;
+  box-shadow: 0 22px 60px rgba(12, 24, 45, .28);
+}
+.detail-panel.open {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) scale(1);
+}
+.conversation-close { display: grid; place-items: center; }
+.conversation-scrim { display: block; position: fixed; z-index: 50; inset: 0; border: 0; background: rgba(13, 25, 45, .46); cursor: pointer; }
+@media (max-width: 640px) {
+  .detail-panel { top: 0; right: 0; bottom: 0; left: 0; width: auto; max-height: none; border-radius: 0; transform: translateY(24px); }
+  .detail-panel.open { transform: translateY(0); }
+}

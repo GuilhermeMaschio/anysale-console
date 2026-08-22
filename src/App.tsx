@@ -130,6 +130,18 @@ export default function App() {
 
   useEffect(() => { if (authenticated) void loadLeads() }, [authenticated])
 
+  useEffect(() => {
+    if (!conversationOpen) return
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setConversationOpen(false) }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [conversationOpen])
+
   const loadReport = async () => {
     setReportLoading(true)
     setReportError('')
@@ -280,7 +292,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className={`panel detail-panel ${conversationOpen ? 'open' : ''}`} aria-busy={detailLoading} aria-label="Painel de atendimento">
+        <section className={`panel detail-panel ${conversationOpen ? 'open' : ''}`} aria-busy={detailLoading} aria-label="Painel de atendimento" role="dialog" aria-modal={conversationOpen}>
           {detailLoading && <p className="empty-state">Carregando dados do lead...</p>}
           {!detailLoading && !lead && <p className="empty-state">Selecione um lead para ver os detalhes.</p>}
           {!detailLoading && lead && <>
