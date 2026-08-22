@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { api, type Funnel, type Interaction, type LeadApi } from './api'
-import keycloak, { currentUserName, signIn, signOut } from './auth'
+import { api, type AiSettings, type AiUsage, type Funnel, type Interaction, type LeadApi } from './api'
+import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
@@ -13,7 +13,7 @@ const stageLabels: Record<string, string> = {
   LOST: 'Fechado — perdido',
 }
 type Notice = { message: string; type: 'error' | 'success' }
-type View = 'leads' | 'reports'
+type View = 'leads' | 'reports' | 'ai'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -65,6 +65,8 @@ export default function App() {
   const [interactionsLoading, setInteractionsLoading] = useState(false)
   const [interactionsError, setInteractionsError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const [sendingMessage, setSendingMessage] = useState(false)
   const [stageUpdatingId, setStageUpdatingId] = useState<string>()
   const [draggedLeadId, setDraggedLeadId] = useState<string>()
   const [dragOverStage, setDragOverStage] = useState<string>()
@@ -75,6 +77,11 @@ export default function App() {
   const [funnel, setFunnel] = useState<Funnel>()
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState('')
+  const [aiSettings, setAiSettings] = useState<AiSettings>()
+  const [aiUsage, setAiUsage] = useState<AiUsage>()
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiSaving, setAiSaving] = useState(false)
+  const [aiError, setAiError] = useState('')
   const [notice, setNotice] = useState<Notice>()
 
   const loadLead = async (id: string, openConversation = true) => {
@@ -137,6 +144,25 @@ export default function App() {
 
   useEffect(() => { if (authenticated && view === 'reports') void loadReport() }, [authenticated, view])
 
+  const loadAi = async () => {
+    setAiLoading(true); setAiError('')
+    try {
+      const [settings, usage] = await Promise.all([api.aiSettings(), api.aiUsage()])
+      setAiSettings(settings); setAiUsage(usage)
+    } catch (error) { setAiError(errorMessage(error, 'Não foi possível carregar a configuração de IA')) }
+    finally { setAiLoading(false) }
+  }
+
+  useEffect(() => { if (authenticated && view === 'ai' && isAdministrator()) void loadAi() }, [authenticated, view])
+
+  const saveAi = async () => {
+    if (!aiSettings) return
+    setAiSaving(true); setAiError('')
+    try { setAiSettings(await api.saveAiSettings(aiSettings)); await loadAi() }
+    catch (error) { setAiError(errorMessage(error, 'Não foi possível salvar a política de IA')) }
+    finally { setAiSaving(false) }
+  }
+
   if (!authenticated) return <LoginScreen />
 
   const save = async (patch: object) => {
@@ -179,6 +205,25 @@ export default function App() {
     if (lead) await updateLeadStage(lead.id, stage)
   }
 
+  const sendMessage = async () => {
+    if (!lead || !message.trim()) return
+    setSendingMessage(true)
+    setNotice(undefined)
+    try {
+      await api.sendWhatsApp(lead.id, message.trim())
+      setMessage('')
+      await loadLead(lead.id, true)
+      setNotice({ message: 'Mensagem enviada para o WhatsApp.', type: 'success' })
+    } catch (error) {
+      const fallback = error instanceof Error && error.message.includes('API 503')
+        ? 'O envio pelo WhatsApp ainda não está configurado no servidor.'
+        : 'Não foi possível enviar a mensagem'
+      setNotice({ message: errorMessage(error, fallback), type: 'error' })
+    } finally {
+      setSendingMessage(false)
+    }
+  }
+
   const estimatedPipeline = leads.reduce((total, item) => total + (item.estimatedValue ?? 0), 0)
   const closedRevenue = leads.reduce((total, item) => total + (item.actualValue ?? 0), 0)
   const wonLeads = leads.filter((item) => item.stage === 'WON').length
@@ -195,13 +240,14 @@ export default function App() {
       <nav aria-label="Navegação principal">
         <button className={`nav-item ${view === 'leads' ? 'active' : ''}`} title="Leads" onClick={() => setView('leads')}><span className="nav-icon">◫</span><span className="nav-label">Leads</span><span className="nav-count">{leads.length}</span></button>
         <button className={`nav-item ${view === 'reports' ? 'active' : ''}`} title="Relatórios" onClick={() => setView('reports')}><span className="nav-icon">▥</span><span className="nav-label">Relatórios</span></button>
+        {isAdministrator() && <button className={`nav-item ${view === 'ai' ? 'active' : ''}`} title="Configuração de IA" onClick={() => setView('ai')}><span className="nav-icon">✦</span><span className="nav-label">IA</span></button>}
       </nav>
       <div className="sidebar-footer"><span className="status-dot" /><span className="sidebar-footer-label">Integração de leads ativa</span></div>
     </aside>
 
     <main className="dashboard">
       <header className="topbar">
-        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : 'Relatórios comerciais'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : 'Acompanhe os indicadores e o desempenho da sua operação.'}</p></div>
+        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
         <div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div>
       </header>
 
@@ -247,7 +293,7 @@ export default function App() {
               {!interactionsLoading && interactions.length > 0 && <div className="conversation-messages">{interactions.map((interaction) => <article key={interaction.id} className={`message-bubble ${interaction.direction === 'OUTBOUND' ? 'outbound' : 'inbound'}`}><p>{interaction.message}</p><footer><span>{interaction.direction === 'OUTBOUND' ? 'Você' : lead.name}</span><time>{interactionDate(interaction.createdAt)}</time></footer></article>)}</div>}
             </section>
 
-            <div className="composer"><textarea disabled placeholder="Digite uma mensagem..." aria-label="Mensagem para o lead" /><div className="composer-footer"><span>O envio de mensagens será liberado quando a integração de WhatsApp estiver disponível.</span><button disabled title="O envio pelo WhatsApp depende de uma integração ainda não disponível">Enviar <span>➤</span></button></div></div>
+            <div className="composer">{lead.suggestedReply && <button className="ai-draft-action" onClick={() => setMessage(lead.suggestedReply ?? '')}>Usar sugestão da IA</button>}<textarea value={message} onChange={(event) => setMessage(event.target.value)} disabled={sendingMessage} placeholder="Digite uma mensagem..." aria-label="Mensagem para o lead" /><div className="composer-footer"><span>{lead.suggestedReply ? 'Revise a sugestão da IA antes de enviar.' : 'A mensagem será enviada pelo WhatsApp do lead.'}</span><button onClick={() => void sendMessage()} disabled={!message.trim() || sendingMessage}>{sendingMessage ? 'Enviando...' : <>Enviar <span>➤</span></>}</button></div></div>
 
             <section className={`details-drawer ${detailsOpen ? 'open' : ''}`}>
               <button className="details-drawer-heading" onClick={() => setDetailsOpen((isOpen) => !isOpen)} aria-expanded={detailsOpen}><span><b>Informações comerciais</b><small>Etapa, responsável e valores</small></span><span>{detailsOpen ? 'Ocultar' : 'Ver detalhes'} <i>{detailsOpen ? '⌃' : '⌄'}</i></span></button>
@@ -257,7 +303,7 @@ export default function App() {
                 <label>Potencial em negociação<input type="number" value={lead.estimatedValue ?? ''} onChange={(event) => setLead({ ...lead, estimatedValue: event.target.value === '' ? undefined : Number(event.target.value) })} onBlur={(event) => void save({ estimatedValue: event.target.value === '' ? undefined : Number(event.target.value) })} disabled={saving} /></label>
                 <label>Valor realizado<input type="number" value={lead.actualValue ?? ''} onChange={(event) => setLead({ ...lead, actualValue: event.target.value === '' ? undefined : Number(event.target.value) })} onBlur={(event) => void save({ actualValue: event.target.value === '' ? undefined : Number(event.target.value) })} disabled={saving} /></label>
                 {lead.stage === 'LOST' && <label className="full-width">Motivo de perda<input value={lead.lostReason ?? ''} onChange={(event) => setLead({ ...lead, lostReason: event.target.value })} onBlur={(event) => void save({ lostReason: event.target.value })} disabled={saving} /></label>}
-              </div><div className="actions"><button className="secondary" disabled title="A edição da sugestão depende de uma integração ainda não disponível">Editar sugestão da IA</button></div></div>}
+              </div>{lead.suggestedReply && <div className="actions"><button className="secondary" onClick={() => { setMessage(lead.suggestedReply ?? ''); setDetailsOpen(false) }}>Usar sugestão da IA</button></div>}</div>}
             </section>
           </>}
         </section>
@@ -279,6 +325,36 @@ export default function App() {
           <div className="report-grid">
             <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Funil</p><h2>Distribuição por etapa</h2></div><span>{funnel.totalLeads} leads</span></div><div className="stage-distribution">{stages.map((stage) => { const total = funnel.leadsByStage?.[stage] ?? 0; const width = funnel.totalLeads ? Math.round((total / funnel.totalLeads) * 100) : 0; return <div className="stage-row" key={stage}><div><span className={stageClass(stage)}>{stageLabel(stage)}</span><b>{total}</b></div><div className="stage-track"><i className={`stage-fill stage-${stage.toLowerCase()}`} style={{ width: `${width}%` }} /></div><small>{width}% da base</small></div>})}</div></section>
             <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Perdas</p><h2>Motivos de perda</h2></div><span>{funnel.lostLeads} fechados — perdido</span></div>{Object.keys(funnel.lossesByReason ?? {}).length === 0 ? <p className="report-empty">Não há motivos de perda registrados no período.</p> : <div className="loss-list">{Object.entries(funnel.lossesByReason).sort(([, first], [, second]) => second - first).map(([reason, total]) => <div className="loss-row" key={reason}><span>{reason || 'Não informado'}</span><b>{total}</b></div>)}</div>}</section>
+          </div>
+        </>}
+      </section>}
+
+      {view === 'ai' && isAdministrator() && <section className="ai-view" aria-busy={aiLoading}>
+        {aiLoading && <div className="report-state">Carregando configuração de IA...</div>}
+        {!aiLoading && aiError && <div className="report-state report-error"><p>{aiError}</p><button className="retry" onClick={() => void loadAi()}>Tentar novamente</button></div>}
+        {!aiLoading && !aiError && aiSettings && <>
+          <div className="ai-warning">A chave da OpenAI permanece somente no servidor. A IA só pode operar se o ambiente também estiver habilitado.</div>
+          {!aiSettings.providerAvailable && <div className="ai-warning muted">O provedor não está pronto no ambiente. Confirme a flag de habilitação e a chave técnica no Lead Service; salvar esta tela, por si só, não ativa a IA.</div>}
+          <div className="ai-grid">
+            <section className="report-panel ai-settings-panel"><div className="report-panel-heading"><div><p className="section-kicker">Política</p><h2>Como a IA responde</h2></div></div>
+              <div className="ai-form">
+                <label className="ai-toggle"><input type="checkbox" checked={aiSettings.enabled} onChange={(event) => setAiSettings({...aiSettings, enabled:event.target.checked})} /><span>Usar IA para enriquecer conversas</span></label>
+                <label>Modelo
+                  <select value={aiSettings.model ?? ''} onChange={(event) => setAiSettings({...aiSettings, model:event.target.value})}>
+                    <option value="">Selecione um modelo</option>{aiSettings.allowedModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                  </select>
+                </label>
+                {aiSettings.allowedModels.length === 0 && <p className="field-help">Nenhum modelo foi liberado pelo ambiente. Defina <code>OPENAI_ALLOWED_MODELS</code> no servidor.</p>}
+                <label>Máximo de tokens por resposta<input type="number" min="100" max="4000" value={aiSettings.maxOutputTokens} onChange={(event) => setAiSettings({...aiSettings, maxOutputTokens:Number(event.target.value)})} /></label>
+                <label>Limite mensal de requisições <input type="number" min="1" placeholder="Sem limite" value={aiSettings.monthlyRequestLimit ?? ''} onChange={(event) => setAiSettings({...aiSettings, monthlyRequestLimit:event.target.value ? Number(event.target.value) : undefined})} /></label>
+                <label>Limite mensal de tokens <input type="number" min="1" placeholder="Sem limite" value={aiSettings.monthlyTokenLimit ?? ''} onChange={(event) => setAiSettings({...aiSettings, monthlyTokenLimit:event.target.value ? Number(event.target.value) : undefined})} /></label>
+                <button className="ai-save" onClick={() => void saveAi()} disabled={aiSaving}>{aiSaving ? 'Salvando...' : 'Salvar política'}</button>
+              </div>
+            </section>
+            <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Consumo</p><h2>{aiUsage?.month ?? 'Mês atual'}</h2></div><button onClick={() => void loadAi()} aria-label="Atualizar consumo">↻</button></div>
+              <div className="ai-usage"><div><span>Requisições</span><strong>{aiUsage?.requests ?? 0}</strong><small>{aiUsage?.monthlyRequestLimit ? `de ${aiUsage.monthlyRequestLimit} permitidas` : 'sem limite configurado'}</small></div><div><span>Tokens totais</span><strong>{aiUsage?.totalTokens ?? 0}</strong><small>{aiUsage?.monthlyTokenLimit ? `de ${aiUsage.monthlyTokenLimit} permitidos` : 'sem limite configurado'}</small></div><div><span>Entrada</span><strong>{aiUsage?.inputTokens ?? 0}</strong><small>contexto enviado</small></div><div><span>Saída</span><strong>{aiUsage?.outputTokens ?? 0}</strong><small>respostas geradas</small></div></div>
+              <p className="field-help">O Console exibe tokens reais retornados pelo provedor. O custo em moeda não é estimado automaticamente, pois depende da tabela comercial vigente do modelo escolhido.</p>
+            </section>
           </div>
         </>}
       </section>}

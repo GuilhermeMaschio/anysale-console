@@ -38,4 +38,11 @@ export function currentUserName(): string {
   return typeof name === 'string' && name.trim() ? name : 'Operador'
 }
 
+export function isAdministrator(): boolean {
+  const token = keycloak.tokenParsed as { realm_access?: { roles?: unknown }, resource_access?: Record<string, { roles?: unknown }> } | undefined
+  const realmRoles = Array.isArray(token?.realm_access?.roles) ? token.realm_access.roles : []
+  const clientRoles = Array.isArray(token?.resource_access?.['anysale-console']?.roles) ? token.resource_access['anysale-console'].roles : []
+  return [...realmRoles, ...clientRoles].some((role) => typeof role === 'string' && role.toUpperCase() === 'ADMIN')
+}
+
 export default keycloak
