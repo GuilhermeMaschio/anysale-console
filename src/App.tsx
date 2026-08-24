@@ -67,6 +67,12 @@ export default function App() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [sendingMessage, setSendingMessage] = useState(false)
+  const [generatingSuggestion, setGeneratingSuggestion] = useState(false)
+  const [testMessage, setTestMessage] = useState('')
+  const [testDirection, setTestDirection] = useState<'IN' | 'OUT'>('IN')
+  const [addingTestMessage, setAddingTestMessage] = useState(false)
+  const [testInteractionFeedback, setTestInteractionFeedback] = useState<Notice>()
+  const [aiSuggestionFeedback, setAiSuggestionFeedback] = useState<Notice>()
   const [stageUpdatingId, setStageUpdatingId] = useState<string>()
   const [draggedLeadId, setDraggedLeadId] = useState<string>()
   const [dragOverStage, setDragOverStage] = useState<string>()
@@ -236,6 +242,65 @@ export default function App() {
     }
   }
 
+  const generateAiSuggestion = async () => {
+    if (!lead) return
+    setGeneratingSuggestion(true)
+    setNotice(undefined)
+    setAiSuggestionFeedback(undefined)
+    try {
+      const updated = await api.enrichWithAi(lead.id)
+      setLead(updated)
+      setLeads((items) => items.map((item) => item.id === updated.id ? { ...item, ...updated } : item))
+      if (updated.suggestedReply) setMessage(updated.suggestedReply)
+      const providerMessage = updated.aiProviderStatus === 'OPENAI'
+        ? 'Sugestão gerada pela OpenAI. Revise antes de enviar.'
+        : updated.aiProviderStatus === 'HTTP_401'
+          ? 'A OpenAI recusou a autenticação (HTTP 401). Gere uma nova chave de API e reinicie o Lead Service.'
+        : updated.aiProviderStatus === 'HTTP_429'
+          ? 'A OpenAI recusou por cota ou crédito (HTTP 429). Confira o faturamento da API na OpenAI Platform.'
+        : updated.aiProviderStatus === 'HTTP_404'
+          ? 'O modelo configurado não está disponível para esta chave (HTTP 404). Confira o modelo liberado no servidor.'
+        : updated.aiProviderStatus === 'NOT_READY'
+          ? 'A OpenAI não está pronta no servidor. Confira a política de IA e as variáveis do Lead Service.'
+        : updated.aiProviderStatus && updated.aiProviderStatus !== 'NOT_ATTEMPTED'
+          ? `A OpenAI não respondeu (${updated.aiProviderStatus}); foi usada a sugestão local de contingência.`
+          : 'A IA analisou a conversa, mas não gerou uma sugestão. Adicione mensagens ao histórico e tente novamente.'
+      const feedback = { message: providerMessage, type: updated.aiProviderStatus === 'OPENAI' ? 'success' : 'error' } as const
+      setAiSuggestionFeedback(feedback)
+      setNotice(feedback)
+    } catch (error) {
+      const feedback = { message: errorMessage(error, 'Não foi possível gerar a sugestão da IA'), type: 'error' } as const
+      setAiSuggestionFeedback(feedback)
+      setNotice(feedback)
+    } finally {
+      setGeneratingSuggestion(false)
+    }
+  }
+
+  const addTestMessage = async () => {
+    if (!lead || !testMessage.trim()) return
+    setAddingTestMessage(true)
+    setTestInteractionFeedback(undefined)
+    setNotice(undefined)
+    try {
+      const interaction = await api.addTestInteraction(lead.id, testMessage.trim(), testDirection)
+      setTestMessage('')
+      setInteractions((items) => [interaction, ...items])
+      const updatedLead = { ...lead, lastMessage: interaction.message }
+      setLead(updatedLead)
+      setLeads((items) => items.map((item) => item.id === updatedLead.id ? { ...item, lastMessage: interaction.message } : item))
+      const feedback = { message: 'Mensagem adicionada ao histórico. Ela não foi enviada ao WhatsApp.', type: 'success' } as const
+      setTestInteractionFeedback(feedback)
+      setNotice(feedback)
+    } catch (error) {
+      const feedback = { message: errorMessage(error, 'Não foi possível adicionar a mensagem de teste'), type: 'error' } as const
+      setTestInteractionFeedback(feedback)
+      setNotice(feedback)
+    } finally {
+      setAddingTestMessage(false)
+    }
+  }
+
   const estimatedPipeline = leads.reduce((total, item) => total + (item.estimatedValue ?? 0), 0)
   const closedRevenue = leads.reduce((total, item) => total + (item.actualValue ?? 0), 0)
   const wonLeads = leads.filter((item) => item.stage === 'WON').length
@@ -302,10 +367,10 @@ export default function App() {
               <div className="conversation-heading"><div><p className="section-kicker">Atendimento</p><h3>Histórico da conversa</h3></div>{interactionsLoading && <span className="loading-label">Carregando...</span>}</div>
               {interactionsError && <p className="inline-error">{interactionsError}</p>}
               {!interactionsLoading && !interactionsError && interactions.length === 0 && <div className="conversation-empty"><span>◌</span><p>Ainda não há mensagens nesta conversa.</p></div>}
-              {!interactionsLoading && interactions.length > 0 && <div className="conversation-messages">{interactions.map((interaction) => <article key={interaction.id} className={`message-bubble ${interaction.direction === 'OUTBOUND' ? 'outbound' : 'inbound'}`}><p>{interaction.message}</p><footer><span>{interaction.direction === 'OUTBOUND' ? 'Você' : lead.name}</span><time>{interactionDate(interaction.createdAt)}</time></footer></article>)}</div>}
+              {!interactionsLoading && interactions.length > 0 && <div className="conversation-messages">{interactions.map((interaction) => { const outbound = interaction.direction === 'OUTBOUND' || interaction.direction === 'OUT'; return <article key={interaction.id} className={`message-bubble ${outbound ? 'outbound' : 'inbound'}`}><p>{interaction.message}</p><footer><span>{outbound ? 'Equipe comercial' : lead.name}</span><time>{interactionDate(interaction.createdAt)}</time></footer></article> })}</div>}
             </section>
 
-            <div className="composer">{lead.suggestedReply && <button className="ai-draft-action" onClick={() => setMessage(lead.suggestedReply ?? '')}>Usar sugestão da IA</button>}<textarea value={message} onChange={(event) => setMessage(event.target.value)} disabled={sendingMessage} placeholder="Digite uma mensagem..." aria-label="Mensagem para o lead" /><div className="composer-footer"><span>{lead.suggestedReply ? 'Revise a sugestão da IA antes de enviar.' : 'A mensagem será enviada pelo WhatsApp do lead.'}</span><button onClick={() => void sendMessage()} disabled={!message.trim() || sendingMessage}>{sendingMessage ? 'Enviando...' : <>Enviar <span>➤</span></>}</button></div></div>
+            <div className="composer">{import.meta.env.DEV && <details className="conversation-test"><summary>Adicionar mensagem de teste</summary><div className="conversation-test-fields"><select value={testDirection} onChange={(event) => setTestDirection(event.target.value as 'IN' | 'OUT')} aria-label="Remetente da mensagem de teste"><option value="IN">Cliente</option><option value="OUT">Equipe comercial</option></select><textarea value={testMessage} onChange={(event) => setTestMessage(event.target.value)} disabled={addingTestMessage} placeholder="Escreva uma mensagem para compor o contexto da IA..." aria-label="Mensagem de teste" /><button className="secondary" onClick={() => void addTestMessage()} disabled={!testMessage.trim() || addingTestMessage}>{addingTestMessage ? 'Adicionando...' : 'Adicionar ao histórico'}</button></div>{testInteractionFeedback && <p className={`conversation-test-feedback ${testInteractionFeedback.type}`}>{testInteractionFeedback.message}</p>}<small>Disponível apenas no Console local; não envia WhatsApp nem aciona a IA.</small></details>}<button className="ai-draft-action" onClick={() => void generateAiSuggestion()} disabled={generatingSuggestion}>{generatingSuggestion ? 'Gerando sugestão...' : lead.suggestedReply ? 'Atualizar sugestão da IA' : 'Gerar sugestão da IA'}</button>{aiSuggestionFeedback && <p className={`conversation-test-feedback ${aiSuggestionFeedback.type}`} role="status">{aiSuggestionFeedback.message}</p>}<textarea value={message} onChange={(event) => setMessage(event.target.value)} disabled={sendingMessage || generatingSuggestion} placeholder="Digite uma mensagem..." aria-label="Mensagem para o lead" /><div className="composer-footer"><span>{lead.suggestedReply ? 'Revise a sugestão da IA antes de enviar.' : 'A mensagem será enviada pelo WhatsApp do lead.'}</span><button onClick={() => void sendMessage()} disabled={!message.trim() || sendingMessage || generatingSuggestion}>{sendingMessage ? 'Enviando...' : <>Enviar <span>➤</span></>}</button></div></div>
 
             <section className={`details-drawer ${detailsOpen ? 'open' : ''}`}>
               <button className="details-drawer-heading" onClick={() => setDetailsOpen((isOpen) => !isOpen)} aria-expanded={detailsOpen}><span><b>Informações comerciais</b><small>Etapa, responsável e valores</small></span><span>{detailsOpen ? 'Ocultar' : 'Ver detalhes'} <i>{detailsOpen ? '⌃' : '⌄'}</i></span></button>
