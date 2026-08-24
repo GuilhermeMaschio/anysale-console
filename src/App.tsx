@@ -79,6 +79,8 @@ export default function App() {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [conversationOpen, setConversationOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [colorTheme, setColorTheme] = useState<'light' | 'dark'>('light')
+  const [savingTheme, setSavingTheme] = useState(false)
   const [view, setView] = useState<View>('leads')
   const [funnel, setFunnel] = useState<Funnel>()
   const [reportLoading, setReportLoading] = useState(false)
@@ -135,6 +137,11 @@ export default function App() {
   }
 
   useEffect(() => { if (authenticated) void loadLeads() }, [authenticated])
+
+  useEffect(() => {
+    if (!authenticated) return
+    void api.consolePreference().then((preference) => setColorTheme(preference.colorTheme)).catch(() => undefined)
+  }, [authenticated])
 
   useEffect(() => {
     if (!conversationOpen) return
@@ -242,6 +249,19 @@ export default function App() {
     }
   }
 
+  const toggleTheme = async () => {
+    const nextTheme = colorTheme === 'light' ? 'dark' : 'light'
+    setSavingTheme(true)
+    try {
+      const preference = await api.saveConsolePreference(nextTheme)
+      setColorTheme(preference.colorTheme)
+    } catch (error) {
+      setNotice({ message: errorMessage(error, 'Não foi possível salvar a preferência visual'), type: 'error' })
+    } finally {
+      setSavingTheme(false)
+    }
+  }
+
   const generateAiSuggestion = async () => {
     if (!lead) return
     setGeneratingSuggestion(true)
@@ -262,6 +282,8 @@ export default function App() {
           ? 'O modelo configurado não está disponível para esta chave (HTTP 404). Confira o modelo liberado no servidor.'
         : updated.aiProviderStatus === 'NOT_READY'
           ? 'A OpenAI não está pronta no servidor. Confira a política de IA e as variáveis do Lead Service.'
+        : updated.aiProviderStatus?.startsWith('INCOMPLETE_')
+          ? 'A OpenAI não concluiu a resposta dentro do limite atual. Aumente o máximo de tokens por resposta na política de IA e tente novamente.'
         : updated.aiProviderStatus && updated.aiProviderStatus !== 'NOT_ATTEMPTED'
           ? `A OpenAI não respondeu (${updated.aiProviderStatus}); foi usada a sugestão local de contingência.`
           : 'A IA analisou a conversa, mas não gerou uma sugestão. Adicione mensagens ao histórico e tente novamente.'
@@ -309,9 +331,9 @@ export default function App() {
   const operatorName = currentUserName()
   const operatorInitials = operatorName.split(' ').filter(Boolean).slice(0, 2).map((name) => name[0]).join('').toUpperCase() || 'OP'
 
-  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+  return <div className={`app-shell theme-${colorTheme} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
     <aside className="sidebar">
-      <div className="brand"><span className="brand-mark">a</span><span>anysale</span><em>console</em></div>
+      <div className="brand"><img className="brand-mark" src="/anysale-mark.svg" alt="" /><span>anysale</span><em>console</em></div>
       <button className="sidebar-toggle" onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}><span>{sidebarCollapsed ? '›' : '‹'}</span><b>{sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'}</b></button>
       <div className="workspace-name"><span className="workspace-dot" /><span className="workspace-label">Operação comercial</span></div>
       <nav aria-label="Navegação principal">
@@ -325,7 +347,7 @@ export default function App() {
     <main className="dashboard">
       <header className="topbar">
         <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
-        <div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div>
+        <div className="topbar-actions"><button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
       {view === 'leads' && notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
