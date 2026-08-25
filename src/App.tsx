@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type AiSettings, type AiUsage, type Funnel, type Interaction, type LeadApi } from './api'
+import { api, catalogApi, type AiSettings, type AiSkill, type AiUsage, type Funnel, type Interaction, type LeadApi, type Product } from './api'
 import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 
@@ -13,7 +13,7 @@ const stageLabels: Record<string, string> = {
   LOST: 'Fechado — perdido',
 }
 type Notice = { message: string; type: 'error' | 'success' }
-type View = 'leads' | 'reports' | 'ai'
+type View = 'leads' | 'products' | 'reports' | 'ai'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -82,11 +82,24 @@ export default function App() {
   const [colorTheme, setColorTheme] = useState<'light' | 'dark'>('light')
   const [savingTheme, setSavingTheme] = useState(false)
   const [view, setView] = useState<View>('leads')
+  const [products, setProducts] = useState<Product[]>([])
+  const [productImageUrls, setProductImageUrls] = useState<Record<string, string>>({})
+  const [productsLoading, setProductsLoading] = useState(false)
+  const [productsError, setProductsError] = useState('')
+  const [productFormOpen, setProductFormOpen] = useState(false)
+  const [productSaving, setProductSaving] = useState(false)
+  const [productForm, setProductForm] = useState({ sku: '', title: '', category: '', description: '', price: '', reorderPoint: '0', initialStock: '0' })
+  const [productImage, setProductImage] = useState<File>()
   const [funnel, setFunnel] = useState<Funnel>()
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState('')
   const [aiSettings, setAiSettings] = useState<AiSettings>()
   const [aiUsage, setAiUsage] = useState<AiUsage>()
+  const [aiSkills, setAiSkills] = useState<AiSkill[]>([])
+  const [selectedSkillProfile, setSelectedSkillProfile] = useState('CONSULTATIVE')
+  const [skillDraft, setSkillDraft] = useState('')
+  const [skillSaving, setSkillSaving] = useState(false)
+  const [aiTab, setAiTab] = useState<'policy' | 'skills'>('policy')
   const [aiLoading, setAiLoading] = useState(false)
   const [aiSaving, setAiSaving] = useState(false)
   const [aiError, setAiError] = useState('')
@@ -168,12 +181,28 @@ export default function App() {
   }
 
   useEffect(() => { if (authenticated && view === 'reports') void loadReport() }, [authenticated, view])
+  const loadProducts = async () => { setProductsLoading(true); setProductsError(''); try { setProducts(await catalogApi.products()) } catch (error) { setProductsError(errorMessage(error, 'Não foi possível carregar os produtos')) } finally { setProductsLoading(false) } }
+  useEffect(() => { if (authenticated && view === 'products') void loadProducts() }, [authenticated, view])
+  useEffect(() => {
+    let cancelled = false
+    const urls: string[] = []
+    const productsWithImage = products.filter((product) => product.hasImage)
+    if (productsWithImage.length === 0) { setProductImageUrls({}); return }
+    void Promise.all(productsWithImage.map(async (product) => {
+      try { const url = await catalogApi.imageUrl(product.id); urls.push(url); return [product.id, url] as const } catch { return undefined }
+    })).then((entries) => { if (!cancelled) setProductImageUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry !== undefined))) })
+    return () => { cancelled = true; urls.forEach((url) => URL.revokeObjectURL(url)) }
+  }, [products])
+  const saveProduct = async () => { setProductSaving(true); try { const product = await catalogApi.createProduct({ ...productForm, price: Number(productForm.price), reorderPoint: Number(productForm.reorderPoint), initialStock: Number(productForm.initialStock), available: true, currency: 'BRL', tags: [] }); if (productImage) await catalogApi.uploadImage(product.id, productImage); setProductFormOpen(false); setProductImage(undefined); setProductForm({ sku: '', title: '', category: '', description: '', price: '', reorderPoint: '0', initialStock: '0' }); await loadProducts() } catch (error) { setProductsError(errorMessage(error, 'Não foi possível salvar o produto')) } finally { setProductSaving(false) } }
+  const archiveProduct = async (product: Product) => { if (!window.confirm(`Excluir ${product.title} da listagem? O histórico de estoque será preservado.`)) return; try { await catalogApi.archiveProduct(product.id); await loadProducts() } catch (error) { setProductsError(errorMessage(error, 'Não foi possível excluir o produto')) } }
 
   const loadAi = async () => {
     setAiLoading(true); setAiError('')
     try {
-      const [settings, usage] = await Promise.all([api.aiSettings(), api.aiUsage()])
-      setAiSettings(settings); setAiUsage(usage)
+      const [settings, usage, skills] = await Promise.all([api.aiSettings(), api.aiUsage(), api.aiSkills()])
+      setAiSettings(settings); setAiUsage(usage); setAiSkills(skills)
+      const selected = skills.find((skill) => skill.profile === selectedSkillProfile) ?? skills[0]
+      if (selected) { setSelectedSkillProfile(selected.profile); setSkillDraft(selected.content) }
     } catch (error) { setAiError(errorMessage(error, 'Não foi possível carregar a configuração de IA')) }
     finally { setAiLoading(false) }
   }
@@ -248,6 +277,9 @@ export default function App() {
       setSendingMessage(false)
     }
   }
+  const selectSkill = (profile: string) => { const skill = aiSkills.find((item) => item.profile === profile); if (skill) { setSelectedSkillProfile(profile); setSkillDraft(skill.content) } }
+  const saveSkill = async () => { setSkillSaving(true); setAiError(''); try { const updated = await api.saveAiSkill(selectedSkillProfile, skillDraft); setAiSkills((skills) => skills.map((skill) => skill.profile === updated.profile ? updated : skill)); setSkillDraft(updated.content) } catch (error) { setAiError(errorMessage(error, 'Não foi possível salvar a skill')) } finally { setSkillSaving(false) } }
+  const resetSkill = async () => { if (!window.confirm('Restaurar o texto padrão desta skill? A personalização desta empresa será removida.')) return; setSkillSaving(true); try { await api.resetAiSkill(selectedSkillProfile); await loadAi() } catch (error) { setAiError(errorMessage(error, 'Não foi possível restaurar a skill')) } finally { setSkillSaving(false) } }
 
   const toggleTheme = async () => {
     const nextTheme = colorTheme === 'light' ? 'dark' : 'light'
@@ -338,6 +370,7 @@ export default function App() {
       <div className="workspace-name"><span className="workspace-dot" /><span className="workspace-label">Operação comercial</span></div>
       <nav aria-label="Navegação principal">
         <button className={`nav-item ${view === 'leads' ? 'active' : ''}`} title="Leads" onClick={() => setView('leads')}><span className="nav-icon">◫</span><span className="nav-label">Leads</span><span className="nav-count">{leads.length}</span></button>
+        <button className={`nav-item ${view === 'products' ? 'active' : ''}`} title="Produtos e estoque" onClick={() => setView('products')}><span className="nav-icon">▣</span><span className="nav-label">Produtos</span></button>
         <button className={`nav-item ${view === 'reports' ? 'active' : ''}`} title="Relatórios" onClick={() => setView('reports')}><span className="nav-icon">▥</span><span className="nav-label">Relatórios</span></button>
         {isAdministrator() && <button className={`nav-item ${view === 'ai' ? 'active' : ''}`} title="Configuração de IA" onClick={() => setView('ai')}><span className="nav-icon">✦</span><span className="nav-label">IA</span></button>}
       </nav>
@@ -346,7 +379,7 @@ export default function App() {
 
     <main className="dashboard">
       <header className="topbar">
-        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
+        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'products' ? 'Produtos e estoque' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
         <div className="topbar-actions"><button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
@@ -410,6 +443,14 @@ export default function App() {
       </div>
       </>}
 
+      {view === 'products' && <section className="products-view" aria-busy={productsLoading}>
+        <div className="products-toolbar"><p className="field-help">O estoque disponível é a base para sugestões comerciais futuras da IA.</p><button className="ai-save" onClick={() => setProductFormOpen((open) => !open)}>{productFormOpen ? 'Cancelar' : 'Novo produto'}</button></div>
+        {productFormOpen && <section className="report-panel product-form"><label>SKU<input value={productForm.sku} onChange={(event) => setProductForm({...productForm, sku:event.target.value})} placeholder="EX.: CAV-001" /></label><label>Produto<input value={productForm.title} onChange={(event) => setProductForm({...productForm, title:event.target.value})} placeholder="Nome do produto" /></label><label>Categoria<input value={productForm.category} onChange={(event) => setProductForm({...productForm, category:event.target.value})} placeholder="Ex.: Cavalos" /></label><label className="full-width">Descrição para a IA<textarea value={productForm.description} onChange={(event) => setProductForm({...productForm, description:event.target.value})} placeholder="Características, diferenciais, condições e informações úteis para recomendar este produto." /></label><label>Foto do produto<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setProductImage(event.target.files?.[0])} /></label><label>Preço (R$)<input type="number" min="0" value={productForm.price} onChange={(event) => setProductForm({...productForm, price:event.target.value})} /></label><label>Estoque inicial<input type="number" min="0" value={productForm.initialStock} onChange={(event) => setProductForm({...productForm, initialStock:event.target.value})} /></label><label>Estoque mínimo<input type="number" min="0" value={productForm.reorderPoint} onChange={(event) => setProductForm({...productForm, reorderPoint:event.target.value})} /></label><button className="ai-save" disabled={productSaving || !productForm.sku || !productForm.title || !productForm.category || !productForm.price} onClick={() => void saveProduct()}>{productSaving ? 'Salvando...' : 'Salvar produto'}</button></section>}
+        {productsLoading && <div className="report-state">Carregando produtos...</div>}
+        {!productsLoading && productsError && <div className="report-state report-error"><p>{productsError}</p><button className="retry" onClick={() => void loadProducts()}>Tentar novamente</button></div>}
+        {!productsLoading && !productsError && <section className="report-panel products-table"><div className="products-table-head"><span>Produto</span><span>Estoque disponível</span><span>Mínimo</span><span>Preço</span><span /></div>{products.length === 0 ? <p className="report-empty">Ainda não há produtos cadastrados para esta empresa.</p> : products.map((product) => <article key={product.id} className={product.lowStock ? 'low-stock' : ''}><div className="product-identity">{productImageUrls[product.id] ? <img className="product-thumbnail" src={productImageUrls[product.id]} alt="" /> : <span className="product-thumbnail product-thumbnail-empty" aria-hidden="true">▣</span>}<div><b>{product.title}</b><small>{product.sku} · {product.category}</small></div></div><strong>{product.availableQuantity}</strong><span>{product.reorderPoint}</span><span>{formatCurrency(product.price)}</span><button className="product-delete" onClick={() => void archiveProduct(product)}>Excluir</button></article>)}</section>}
+      </section>}
+
       {view === 'reports' && <section className="reports-view" aria-busy={reportLoading}>
         {reportLoading && <div className="report-state">Carregando indicadores comerciais...</div>}
         {!reportLoading && reportError && <div className="report-state report-error"><p>{reportError}</p><button className="retry" onClick={() => void loadReport()}>Tentar novamente</button></div>}
@@ -434,7 +475,11 @@ export default function App() {
         {!aiLoading && !aiError && aiSettings && <>
           <div className="ai-warning">A chave da OpenAI permanece somente no servidor. A IA só pode operar se o ambiente também estiver habilitado.</div>
           {!aiSettings.providerAvailable && <div className="ai-warning muted">O provedor não está pronto no ambiente. Confirme a flag de habilitação e a chave técnica no Lead Service; salvar esta tela, por si só, não ativa a IA.</div>}
-          <div className="ai-grid">
+          <div className="ai-tabs" role="tablist" aria-label="Administração de IA">
+            <button className={aiTab === 'policy' ? 'active' : ''} role="tab" aria-selected={aiTab === 'policy'} onClick={() => setAiTab('policy')}>Política e consumo</button>
+            <button className={aiTab === 'skills' ? 'active' : ''} role="tab" aria-selected={aiTab === 'skills'} onClick={() => setAiTab('skills')}>Skills de atendimento</button>
+          </div>
+          {aiTab === 'policy' && <div className="ai-grid">
             <section className="report-panel ai-settings-panel"><div className="report-panel-heading"><div><p className="section-kicker">Política</p><h2>Como a IA responde</h2></div></div>
               <div className="ai-form">
                 <label className="ai-toggle"><input type="checkbox" checked={aiSettings.enabled} onChange={(event) => setAiSettings({...aiSettings, enabled:event.target.checked})} /><span>Usar IA para enriquecer conversas</span></label>
@@ -447,6 +492,15 @@ export default function App() {
                 <label>Máximo de tokens por resposta<input type="number" min="100" max="4000" value={aiSettings.maxOutputTokens} onChange={(event) => setAiSettings({...aiSettings, maxOutputTokens:Number(event.target.value)})} /></label>
                 <label>Limite mensal de requisições <input type="number" min="1" placeholder="Sem limite" value={aiSettings.monthlyRequestLimit ?? ''} onChange={(event) => setAiSettings({...aiSettings, monthlyRequestLimit:event.target.value ? Number(event.target.value) : undefined})} /></label>
                 <label>Limite mensal de tokens <input type="number" min="1" placeholder="Sem limite" value={aiSettings.monthlyTokenLimit ?? ''} onChange={(event) => setAiSettings({...aiSettings, monthlyTokenLimit:event.target.value ? Number(event.target.value) : undefined})} /></label>
+                <div className="ai-style-divider"><b>Estilo de atendimento</b><span>Define como a sugestão conversa, sem alterar fatos, preços ou estoque.</span></div>
+                <label>Perfil de atendimento<select value={aiSettings.serviceProfile} onChange={(event) => setAiSettings({...aiSettings, serviceProfile:event.target.value})}><option value="CONSULTATIVE">Consultivo</option><option value="DIRECT">Direto</option><option value="PREMIUM">Premium</option><option value="REACTIVATION">Reativação</option></select></label>
+                <label>Tom<select value={aiSettings.tone} onChange={(event) => setAiSettings({...aiSettings, tone:event.target.value})}><option value="WARM">Acolhedor</option><option value="NEUTRAL">Neutro</option><option value="TECHNICAL">Técnico</option></select></label>
+                <label>Formalidade<select value={aiSettings.formality} onChange={(event) => setAiSettings({...aiSettings, formality:event.target.value})}><option value="INFORMAL">Informal</option><option value="BALANCED">Equilibrada</option><option value="FORMAL">Formal</option></select></label>
+                <label>Tamanho da resposta<select value={aiSettings.responseLength} onChange={(event) => setAiSettings({...aiSettings, responseLength:event.target.value})}><option value="CONCISE">Curta</option><option value="BALANCED">Equilibrada</option><option value="DETAILED">Detalhada</option></select></label>
+                <label>Postura comercial<select value={aiSettings.commercialApproach} onChange={(event) => setAiSettings({...aiSettings, commercialApproach:event.target.value})}><option value="DISCOVER_FIRST">Entender antes de ofertar</option><option value="OFFER_WHEN_FIT">Ofertar quando houver aderência</option><option value="REACTIVATE">Reativar o contato</option></select></label>
+                <label>Instruções adicionais<textarea maxLength={3000} value={aiSettings.customInstructions ?? ''} onChange={(event) => setAiSettings({...aiSettings, customInstructions:event.target.value})} placeholder="Ex.: mencione o primeiro nome; faça somente uma pergunta por vez; não use emojis." /></label>
+                <label>Exemplos aprovados<textarea maxLength={4000} value={aiSettings.approvedExamples ?? ''} onChange={(event) => setAiSettings({...aiSettings, approvedExamples:event.target.value})} placeholder="Cole respostas que representam bem o atendimento. Separe exemplos com uma linha em branco." /></label>
+                <label>Exemplos a evitar<textarea maxLength={4000} value={aiSettings.rejectedExamples ?? ''} onChange={(event) => setAiSettings({...aiSettings, rejectedExamples:event.target.value})} placeholder="Cole respostas genéricas ou inadequadas que a IA não deve imitar." /></label>
                 <button className="ai-save" onClick={() => void saveAi()} disabled={aiSaving}>{aiSaving ? 'Salvando...' : 'Salvar política'}</button>
               </div>
             </section>
@@ -454,7 +508,23 @@ export default function App() {
               <div className="ai-usage"><div><span>Requisições</span><strong>{aiUsage?.requests ?? 0}</strong><small>{aiUsage?.monthlyRequestLimit ? `de ${aiUsage.monthlyRequestLimit} permitidas` : 'sem limite configurado'}</small></div><div><span>Tokens totais</span><strong>{aiUsage?.totalTokens ?? 0}</strong><small>{aiUsage?.monthlyTokenLimit ? `de ${aiUsage.monthlyTokenLimit} permitidos` : 'sem limite configurado'}</small></div><div><span>Entrada</span><strong>{aiUsage?.inputTokens ?? 0}</strong><small>contexto enviado</small></div><div><span>Saída</span><strong>{aiUsage?.outputTokens ?? 0}</strong><small>respostas geradas</small></div></div>
               <p className="field-help">O Console exibe tokens reais retornados pelo provedor. O custo em moeda não é estimado automaticamente, pois depende da tabela comercial vigente do modelo escolhido.</p>
             </section>
-          </div>
+          </div>}
+          {aiTab === 'skills' && <section className="report-panel ai-skills-panel">
+            <div className="report-panel-heading"><div><p className="section-kicker">Skills</p><h2>Roteiros de atendimento</h2></div><span>Por empresa</span></div>
+            <p className="field-help">Escolha o tipo de atendimento e ajuste o roteiro em linguagem simples. As regras de segurança, catálogo e estoque continuam protegidas no servidor.</p>
+            <div className="skill-layout">
+              <nav className="skill-list" aria-label="Skills de atendimento">
+                {aiSkills.map((skill) => <button key={skill.profile} className={selectedSkillProfile === skill.profile ? 'active' : ''} onClick={() => selectSkill(skill.profile)}><b>{skill.label}</b><small>{skill.customized ? 'Personalizada' : 'Padrão do sistema'}</small></button>)}
+              </nav>
+              <div className="skill-editor">
+                <div className="skill-editor-heading"><b>Roteiro selecionado</b><span>Até 8.000 caracteres</span></div>
+                <label className="sr-only" htmlFor="skill-content">Texto da skill</label>
+                <textarea id="skill-content" maxLength={8000} value={skillDraft} onChange={(event) => setSkillDraft(event.target.value)} placeholder="Carregando skill..." />
+                <p className="field-help">Inclua objetivo, forma de qualificar o cliente, tom e exemplos. Não inclua preços, credenciais ou dados sensíveis.</p>
+                <div className="skill-actions"><button className="ai-save" onClick={() => void saveSkill()} disabled={skillSaving || !skillDraft.trim()}>{skillSaving ? 'Salvando...' : 'Salvar roteiro'}</button><button className="secondary" onClick={() => void resetSkill()} disabled={skillSaving}>Restaurar padrão</button></div>
+              </div>
+            </div>
+          </section>}
         </>}
       </section>}
     </main>
