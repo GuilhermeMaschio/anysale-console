@@ -10,6 +10,70 @@ export type AiUsage = { month:string; requests:number; inputTokens:number; outpu
 export type ConsolePreference = { colorTheme:'light'|'dark'; updatedAt?:string }
 export type AiSkill = { profile:string; label:string; content:string; customized:boolean; updatedAt?:string }
 export type Product = { id:string; sku:string; title:string; category:string; description?:string; currency:string; vendor?:string; price:number; tags:string[]; available:boolean; stockQuantity:number; reservedQuantity:number; availableQuantity:number; reorderPoint:number; lowStock:boolean; hasImage:boolean; updatedAt:string }
+
+export type CatalogIntegration = {
+  id: string;
+  tenantId: string;
+  name: string;
+  providerType: string;
+  baseUrl: string;
+  status: 'ACTIVE' | 'INACTIVE' | 'ERROR';
+  hasCredentials: boolean;
+  authType: 'NONE' | 'BEARER_TOKEN' | 'API_KEY_HEADER' | 'API_KEY_QUERY';
+  apiKeyHeaderName?: string;
+  apiKeyQueryName?: string;
+  syncMode: 'MANUAL' | 'SCHEDULED';
+  schedule?: string;
+  fieldMapping?: Record<string, string>;
+  conflictStrategy: 'EXTERNAL_WINS' | 'LOCAL_WINS' | 'REVIEW_REQUIRED';
+  skuFallbackEnabled: boolean;
+  lastSyncAt?: string;
+  lastSyncStatus?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CatalogSyncExecution = {
+  id: string;
+  tenantId: string;
+  integrationId: string;
+  status: 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+  startedAt: string;
+  finishedAt?: string;
+  createdCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  errorCount: number;
+  errorSummary: string[];
+}
+
+export type CatalogPreviewItem = {
+  externalProductId?: string;
+  sku?: string;
+  title?: string;
+  category?: string;
+  description?: string;
+  price?: number;
+  currency?: string;
+  stockQuantity: number;
+  reorderPoint: number;
+  available: boolean;
+  imageUrl?: string;
+  isValid: boolean;
+  validationErrors: string[];
+}
+
+export type CatalogPreviewResponse = {
+  totalItems: number;
+  items: CatalogPreviewItem[];
+}
+
+export type TestConnectionResponse = {
+  success: boolean;
+  statusCode: number;
+  message: string;
+}
+
 async function request<T>(path:string, init?:RequestInit): Promise<T> {
   return requestFrom<T>(baseUrl, path, init)
 }
@@ -36,4 +100,14 @@ export const catalogApi = {
   uploadImage: async (id: string, file: File) => { const token = await accessToken(); const form = new FormData(); form.append('file', file); const response = await fetch(`${catalogBaseUrl}/v1/products/${id}/image`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form }); if (!response.ok) throw new Error(`API ${response.status}`); return response.json() as Promise<Product> },
   imageUrl: async (id: string) => { const token = await accessToken(); const response = await fetch(`${catalogBaseUrl}/v1/products/${id}/image`, { headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`API ${response.status}`); return URL.createObjectURL(await response.blob()) },
   archiveProduct: async (id: string) => { const token = await accessToken(); const response = await fetch(`${catalogBaseUrl}/v1/products/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`API ${response.status}`) },
+
+  // Catalog Integrations
+  integrations: () => requestFrom<CatalogIntegration[]>(catalogBaseUrl, '/v1/catalog-integrations'),
+  createIntegration: (body: object) => requestFrom<CatalogIntegration>(catalogBaseUrl, '/v1/catalog-integrations', { method: 'POST', body: JSON.stringify(body) }),
+  updateIntegration: (id: string, body: object) => requestFrom<CatalogIntegration>(catalogBaseUrl, `/v1/catalog-integrations/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteIntegration: async (id: string) => { const token = await accessToken(); const response = await fetch(`${catalogBaseUrl}/v1/catalog-integrations/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(`API ${response.status}`) },
+  testIntegration: (id: string) => requestFrom<TestConnectionResponse>(catalogBaseUrl, `/v1/catalog-integrations/${id}/test`, { method: 'POST' }),
+  previewIntegration: (id: string) => requestFrom<CatalogPreviewResponse>(catalogBaseUrl, `/v1/catalog-integrations/${id}/preview`, { method: 'POST' }),
+  syncIntegration: (id: string) => requestFrom<CatalogSyncExecution>(catalogBaseUrl, `/v1/catalog-integrations/${id}/sync`, { method: 'POST' }),
+  integrationExecutions: (id: string) => requestFrom<CatalogSyncExecution[]>(catalogBaseUrl, `/v1/catalog-integrations/${id}/executions`),
 }

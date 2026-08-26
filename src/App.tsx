@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { api, catalogApi, type AiSettings, type AiSkill, type AiUsage, type Funnel, type Interaction, type LeadApi, type Product } from './api'
+import { api, catalogApi, type AiSettings, type AiSkill, type AiUsage, type Funnel, type Interaction, type LeadApi, type Product, type CatalogIntegration, type CatalogSyncExecution, type CatalogPreviewResponse, type TestConnectionResponse } from './api'
 import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
+
 import './App.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
@@ -90,6 +91,153 @@ export default function App() {
   const [productSaving, setProductSaving] = useState(false)
   const [productForm, setProductForm] = useState({ sku: '', title: '', category: '', description: '', price: '', reorderPoint: '0', initialStock: '0' })
   const [productImage, setProductImage] = useState<File>()
+
+  const [productsTab, setProductsTab] = useState<'catalog' | 'integrations'>('catalog')
+  const [integrations, setIntegrations] = useState<CatalogIntegration[]>([])
+  const [integrationsLoading, setIntegrationsLoading] = useState(false)
+  const [integrationsError, setIntegrationsError] = useState('')
+  const [integrationFormOpen, setIntegrationFormOpen] = useState(false)
+  const [editingIntegrationId, setEditingIntegrationId] = useState<string>()
+  const [integrationSaving, setIntegrationSaving] = useState(false)
+  const [integrationForm, setIntegrationForm] = useState({
+    name: '', baseUrl: '', providerType: 'GENERIC_REST', authType: 'NONE', secret: '',
+    apiKeyHeaderName: 'X-API-Key', apiKeyQueryName: 'api_key', conflictStrategy: 'EXTERNAL_WINS',
+    skuFallbackEnabled: true, sku: 'sku', title: 'title', price: 'price', stockQuantity: 'stockQuantity',
+    category: 'category', description: 'description', imageUrl: 'imageUrl'
+  })
+  const [testResult, setTestResult] = useState<TestConnectionResponse>()
+  const [testingId, setTestingId] = useState<string>()
+  const [previewData, setPreviewData] = useState<CatalogPreviewResponse>()
+  const [previewingId, setPreviewingId] = useState<string>()
+  const [syncingId, setSyncingId] = useState<string>()
+  const [executionsList, setExecutionsList] = useState<CatalogSyncExecution[]>([])
+  const [viewingExecutionsId, setViewingExecutionsId] = useState<string>()
+
+  const loadIntegrations = async () => {
+    setIntegrationsLoading(true); setIntegrationsError('')
+    try { setIntegrations(await catalogApi.integrations()) }
+    catch (error) { setIntegrationsError(errorMessage(error, 'Não foi possível carregar as integrações de catálogo')) }
+    finally { setIntegrationsLoading(false) }
+  }
+
+  useEffect(() => { if (authenticated && view === 'products' && productsTab === 'integrations') void loadIntegrations() }, [authenticated, view, productsTab])
+
+  const openIntegrationForm = (integration?: CatalogIntegration) => {
+    if (integration) {
+      setEditingIntegrationId(integration.id)
+      setIntegrationForm({
+        name: integration.name, baseUrl: integration.baseUrl, providerType: integration.providerType,
+        authType: integration.authType as 'NONE' | 'BEARER_TOKEN' | 'API_KEY_HEADER' | 'API_KEY_QUERY', secret: '', apiKeyHeaderName: integration.apiKeyHeaderName ?? 'X-API-Key',
+        apiKeyQueryName: integration.apiKeyQueryName ?? 'api_key', conflictStrategy: integration.conflictStrategy,
+        skuFallbackEnabled: integration.skuFallbackEnabled,
+        sku: integration.fieldMapping?.sku ?? 'sku', title: integration.fieldMapping?.title ?? 'title',
+        price: integration.fieldMapping?.price ?? 'price', stockQuantity: integration.fieldMapping?.stockQuantity ?? 'stockQuantity',
+        category: integration.fieldMapping?.category ?? 'category', description: integration.fieldMapping?.description ?? 'description',
+        imageUrl: integration.fieldMapping?.imageUrl ?? 'imageUrl'
+      })
+    } else {
+      setEditingIntegrationId(undefined)
+      setIntegrationForm({
+        name: '', baseUrl: '', providerType: 'GENERIC_REST', authType: 'NONE', secret: '',
+        apiKeyHeaderName: 'X-API-Key', apiKeyQueryName: 'api_key', conflictStrategy: 'EXTERNAL_WINS',
+        skuFallbackEnabled: true, sku: 'sku', title: 'title', price: 'price', stockQuantity: 'stockQuantity',
+        category: 'category', description: 'description', imageUrl: 'imageUrl'
+      })
+    }
+    setIntegrationFormOpen(true)
+  }
+
+  const saveIntegration = async () => {
+    setIntegrationSaving(true); setNotice(undefined)
+    try {
+      const payload = {
+        name: integrationForm.name,
+        baseUrl: integrationForm.baseUrl,
+        providerType: integrationForm.providerType,
+        authType: integrationForm.authType,
+        secret: integrationForm.secret || undefined,
+        apiKeyHeaderName: integrationForm.apiKeyHeaderName,
+        apiKeyQueryName: integrationForm.apiKeyQueryName,
+        conflictStrategy: integrationForm.conflictStrategy,
+        skuFallbackEnabled: integrationForm.skuFallbackEnabled,
+        fieldMapping: {
+          sku: integrationForm.sku, title: integrationForm.title, price: integrationForm.price,
+          stockQuantity: integrationForm.stockQuantity, category: integrationForm.category,
+          description: integrationForm.description, imageUrl: integrationForm.imageUrl
+        }
+      }
+      if (editingIntegrationId) {
+        await catalogApi.updateIntegration(editingIntegrationId, payload)
+      } else {
+        await catalogApi.createIntegration(payload)
+      }
+      setIntegrationFormOpen(false)
+      await loadIntegrations()
+      setNotice({ message: 'Integração salva com sucesso.', type: 'success' })
+    } catch (error) {
+      setNotice({ message: errorMessage(error, 'Não foi possível salvar a integração'), type: 'error' })
+    } finally {
+      setIntegrationSaving(false)
+    }
+  }
+
+  const deleteIntegration = async (id: string, name: string) => {
+    if (!window.confirm(`Remover a integração "${name}"? Os produtos já importados continuarão no AnySale.`)) return
+    try {
+      await catalogApi.deleteIntegration(id)
+      await loadIntegrations()
+      setNotice({ message: 'Integração removida.', type: 'success' })
+    } catch (error) {
+      setNotice({ message: errorMessage(error, 'Não foi possível remover a integração'), type: 'error' })
+    }
+  }
+
+  const testIntegration = async (id: string) => {
+    setTestingId(id); setTestResult(undefined)
+    try {
+      const res = await catalogApi.testIntegration(id)
+      setTestResult(res)
+    } catch (error) {
+      setTestResult({ success: false, statusCode: 500, message: errorMessage(error, 'Falha ao testar conexão') })
+    } finally {
+      setTestingId(undefined)
+    }
+  }
+
+  const previewIntegration = async (id: string) => {
+    setPreviewingId(id); setPreviewData(undefined)
+    try {
+      const res = await catalogApi.previewIntegration(id)
+      setPreviewData(res)
+    } catch (error) {
+      setNotice({ message: errorMessage(error, 'Não foi possível gerar a prévia'), type: 'error' })
+    } finally {
+      setPreviewingId(undefined)
+    }
+  }
+
+  const syncIntegration = async (id: string) => {
+    setSyncingId(id)
+    try {
+      await catalogApi.syncIntegration(id)
+      setNotice({ message: 'Sincronização iniciada em segundo plano. Verifique o histórico de execuções.', type: 'success' })
+      await loadIntegrations()
+    } catch (error) {
+      setNotice({ message: errorMessage(error, 'Não foi possível iniciar a sincronização'), type: 'error' })
+    } finally {
+      setSyncingId(undefined)
+    }
+  }
+
+  const loadExecutions = async (id: string) => {
+    setViewingExecutionsId(id)
+    try {
+      setExecutionsList(await catalogApi.integrationExecutions(id))
+    } catch (error) {
+      setNotice({ message: errorMessage(error, 'Não foi possível carregar o histórico de execuções'), type: 'error' })
+    }
+  }
+
   const [funnel, setFunnel] = useState<Funnel>()
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState('')
@@ -443,12 +591,139 @@ export default function App() {
       </div>
       </>}
 
-      {view === 'products' && <section className="products-view" aria-busy={productsLoading}>
-        <div className="products-toolbar"><p className="field-help">O estoque disponível é a base para sugestões comerciais futuras da IA.</p><button className="ai-save" onClick={() => setProductFormOpen((open) => !open)}>{productFormOpen ? 'Cancelar' : 'Novo produto'}</button></div>
-        {productFormOpen && <section className="report-panel product-form"><label>SKU<input value={productForm.sku} onChange={(event) => setProductForm({...productForm, sku:event.target.value})} placeholder="EX.: CAV-001" /></label><label>Produto<input value={productForm.title} onChange={(event) => setProductForm({...productForm, title:event.target.value})} placeholder="Nome do produto" /></label><label>Categoria<input value={productForm.category} onChange={(event) => setProductForm({...productForm, category:event.target.value})} placeholder="Ex.: Cavalos" /></label><label className="full-width">Descrição para a IA<textarea value={productForm.description} onChange={(event) => setProductForm({...productForm, description:event.target.value})} placeholder="Características, diferenciais, condições e informações úteis para recomendar este produto." /></label><label>Foto do produto<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setProductImage(event.target.files?.[0])} /></label><label>Preço (R$)<input type="number" min="0" value={productForm.price} onChange={(event) => setProductForm({...productForm, price:event.target.value})} /></label><label>Estoque inicial<input type="number" min="0" value={productForm.initialStock} onChange={(event) => setProductForm({...productForm, initialStock:event.target.value})} /></label><label>Estoque mínimo<input type="number" min="0" value={productForm.reorderPoint} onChange={(event) => setProductForm({...productForm, reorderPoint:event.target.value})} /></label><button className="ai-save" disabled={productSaving || !productForm.sku || !productForm.title || !productForm.category || !productForm.price} onClick={() => void saveProduct()}>{productSaving ? 'Salvando...' : 'Salvar produto'}</button></section>}
-        {productsLoading && <div className="report-state">Carregando produtos...</div>}
-        {!productsLoading && productsError && <div className="report-state report-error"><p>{productsError}</p><button className="retry" onClick={() => void loadProducts()}>Tentar novamente</button></div>}
-        {!productsLoading && !productsError && <section className="report-panel products-table"><div className="products-table-head"><span>Produto</span><span>Estoque disponível</span><span>Mínimo</span><span>Preço</span><span /></div>{products.length === 0 ? <p className="report-empty">Ainda não há produtos cadastrados para esta empresa.</p> : products.map((product) => <article key={product.id} className={product.lowStock ? 'low-stock' : ''}><div className="product-identity">{productImageUrls[product.id] ? <img className="product-thumbnail" src={productImageUrls[product.id]} alt="" /> : <span className="product-thumbnail product-thumbnail-empty" aria-hidden="true">▣</span>}<div><b>{product.title}</b><small>{product.sku} · {product.category}</small></div></div><strong>{product.availableQuantity}</strong><span>{product.reorderPoint}</span><span>{formatCurrency(product.price)}</span><button className="product-delete" onClick={() => void archiveProduct(product)}>Excluir</button></article>)}</section>}
+      {view === 'products' && <section className="products-view">
+        <div className="ai-tabs" role="tablist" aria-label="Produtos e Integrações">
+          <button className={productsTab === 'catalog' ? 'active' : ''} role="tab" onClick={() => setProductsTab('catalog')}>Catálogo de produtos</button>
+          <button className={productsTab === 'integrations' ? 'active' : ''} role="tab" onClick={() => setProductsTab('integrations')}>Integrações de catálogo</button>
+        </div>
+
+        {productsTab === 'catalog' && <div aria-busy={productsLoading}>
+          <div className="products-toolbar"><p className="field-help">O estoque disponível é a base para sugestões comerciais futuras da IA.</p><button className="ai-save" onClick={() => setProductFormOpen((open) => !open)}>{productFormOpen ? 'Cancelar' : 'Novo produto'}</button></div>
+          {productFormOpen && <section className="report-panel product-form"><label>SKU<input value={productForm.sku} onChange={(event) => setProductForm({...productForm, sku:event.target.value})} placeholder="EX.: CAV-001" /></label><label>Produto<input value={productForm.title} onChange={(event) => setProductForm({...productForm, title:event.target.value})} placeholder="Nome do produto" /></label><label>Categoria<input value={productForm.category} onChange={(event) => setProductForm({...productForm, category:event.target.value})} placeholder="Ex.: Cavalos" /></label><label className="full-width">Descrição para a IA<textarea value={productForm.description} onChange={(event) => setProductForm({...productForm, description:event.target.value})} placeholder="Características, diferenciais, condições e informações úteis para recomendar este produto." /></label><label>Foto do produto<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setProductImage(event.target.files?.[0])} /></label><label>Preço (R$)<input type="number" min="0" value={productForm.price} onChange={(event) => setProductForm({...productForm, price:event.target.value})} /></label><label>Estoque inicial<input type="number" min="0" value={productForm.initialStock} onChange={(event) => setProductForm({...productForm, initialStock:event.target.value})} /></label><label>Estoque mínimo<input type="number" min="0" value={productForm.reorderPoint} onChange={(event) => setProductForm({...productForm, reorderPoint:event.target.value})} /></label><button className="ai-save" disabled={productSaving || !productForm.sku || !productForm.title || !productForm.category || !productForm.price} onClick={() => void saveProduct()}>{productSaving ? 'Salvando...' : 'Salvar produto'}</button></section>}
+          {productsLoading && <div className="report-state">Carregando produtos...</div>}
+          {!productsLoading && productsError && <div className="report-state report-error"><p>{productsError}</p><button className="retry" onClick={() => void loadProducts()}>Tentar novamente</button></div>}
+          {!productsLoading && !productsError && <section className="report-panel products-table"><div className="products-table-head"><span>Produto</span><span>Estoque disponível</span><span>Mínimo</span><span>Preço</span><span /></div>{products.length === 0 ? <p className="report-empty">Ainda não há produtos cadastrados para esta empresa.</p> : products.map((product) => <article key={product.id} className={product.lowStock ? 'low-stock' : ''}><div className="product-identity">{productImageUrls[product.id] ? <img className="product-thumbnail" src={productImageUrls[product.id]} alt="" /> : <span className="product-thumbnail product-thumbnail-empty" aria-hidden="true">▣</span>}<div><b>{product.title}</b><small>{product.sku} · {product.category}</small></div></div><strong>{product.availableQuantity}</strong><span>{product.reorderPoint}</span><span>{formatCurrency(product.price)}</span><button className="product-delete" onClick={() => void archiveProduct(product)}>Excluir</button></article>)}</section>}
+        </div>}
+
+        {productsTab === 'integrations' && <div className="integrations-view" aria-busy={integrationsLoading}>
+          <div className="products-toolbar">
+            <p className="field-help">Conecte a API externa de um ERP/e-commerce para importar e atualizar produtos e estoque no AnySale.</p>
+            <button className="ai-save" onClick={() => openIntegrationForm()}>{integrationFormOpen ? 'Cancelar' : 'Nova integração'}</button>
+          </div>
+
+          {integrationFormOpen && <section className="report-panel product-form">
+            <h3>{editingIntegrationId ? 'Editar integração de catálogo' : 'Nova integração de catálogo'}</h3>
+            <label>Nome da integração<input value={integrationForm.name} onChange={(e) => setIntegrationForm({...integrationForm, name: e.target.value})} placeholder="Ex.: ERP Vendas Corp" /></label>
+            <label>URL Base da API<input value={integrationForm.baseUrl} onChange={(e) => setIntegrationForm({...integrationForm, baseUrl: e.target.value})} placeholder="https://api.meuerp.com/v1/products" /></label>
+            <label>Tipo de Autenticação
+              <select value={integrationForm.authType} onChange={(e) => setIntegrationForm({...integrationForm, authType: e.target.value as any})}>
+                <option value="NONE">Nenhuma</option>
+                <option value="BEARER_TOKEN">Bearer Token (Header Authorization)</option>
+                <option value="API_KEY_HEADER">API Key no Cabeçalho (Header)</option>
+                <option value="API_KEY_QUERY">API Key na URL (Query Parameter)</option>
+              </select>
+            </label>
+            {integrationForm.authType !== 'NONE' && <label>Chave / Token de Acesso (Segredo)
+              <input type="password" value={integrationForm.secret} onChange={(e) => setIntegrationForm({...integrationForm, secret: e.target.value})} placeholder={editingIntegrationId ? 'Deixe em branco para manter a credencial salva' : 'Insira o token ou API key'} />
+            </label>}
+            {integrationForm.authType === 'API_KEY_HEADER' && <label>Nome do Cabeçalho<input value={integrationForm.apiKeyHeaderName} onChange={(e) => setIntegrationForm({...integrationForm, apiKeyHeaderName: e.target.value})} placeholder="X-API-Key" /></label>}
+            {integrationForm.authType === 'API_KEY_QUERY' && <label>Nome do Parâmetro da URL<input value={integrationForm.apiKeyQueryName} onChange={(e) => setIntegrationForm({...integrationForm, apiKeyQueryName: e.target.value})} placeholder="api_key" /></label>}
+            <label>Estratégia de Conflito
+              <select value={integrationForm.conflictStrategy} onChange={(e) => setIntegrationForm({...integrationForm, conflictStrategy: e.target.value as any})}>
+                <option value="EXTERNAL_WINS">Origem Externa Prevalece (Sobrescreve local)</option>
+                <option value="LOCAL_WINS">AnySale Prevalece (Ignora atualização se existir)</option>
+                <option value="REVIEW_REQUIRED">Exige Revisão (Ignora atualização automatizada)</option>
+              </select>
+            </label>
+            <label className="ai-toggle"><input type="checkbox" checked={integrationForm.skuFallbackEnabled} onChange={(e) => setIntegrationForm({...integrationForm, skuFallbackEnabled: e.target.checked})} /><span>Usar SKU como fallback de correspondência</span></label>
+
+            <div className="full-width">
+              <h4>Mapeamento de Campos JSON (Campo do AnySale $\leftarrow$ Propriedade JSON externa)</h4>
+              <div className="form-fields">
+                <label>SKU<input value={integrationForm.sku} onChange={(e) => setIntegrationForm({...integrationForm, sku: e.target.value})} placeholder="sku ou code" /></label>
+                <label>Título<input value={integrationForm.title} onChange={(e) => setIntegrationForm({...integrationForm, title: e.target.value})} placeholder="title ou name" /></label>
+                <label>Preço<input value={integrationForm.price} onChange={(e) => setIntegrationForm({...integrationForm, price: e.target.value})} placeholder="price ou price_cents" /></label>
+                <label>Estoque<input value={integrationForm.stockQuantity} onChange={(e) => setIntegrationForm({...integrationForm, stockQuantity: e.target.value})} placeholder="stockQuantity ou stock" /></label>
+                <label>Categoria<input value={integrationForm.category} onChange={(e) => setIntegrationForm({...integrationForm, category: e.target.value})} placeholder="category" /></label>
+                <label>Descrição<input value={integrationForm.description} onChange={(e) => setIntegrationForm({...integrationForm, description: e.target.value})} placeholder="description" /></label>
+                <label>URL da Foto<input value={integrationForm.imageUrl} onChange={(e) => setIntegrationForm({...integrationForm, imageUrl: e.target.value})} placeholder="imageUrl ou image" /></label>
+              </div>
+            </div>
+
+            <button className="ai-save" disabled={integrationSaving || !integrationForm.name || !integrationForm.baseUrl} onClick={() => void saveIntegration()}>
+              {integrationSaving ? 'Salvando...' : 'Salvar integração'}
+            </button>
+          </section>}
+
+          {integrationsLoading && <div className="report-state">Carregando integrações...</div>}
+          {!integrationsLoading && integrationsError && <div className="report-state report-error"><p>{integrationsError}</p><button className="retry" onClick={() => void loadIntegrations()}>Tentar novamente</button></div>}
+
+          {!integrationsLoading && !integrationsError && <section className="report-panel integrations-table">
+            <div className="products-table-head">
+              <span>Integração</span>
+              <span>URL / Provedor</span>
+              <span>Status</span>
+              <span>Última sincronização</span>
+              <span>Ações</span>
+            </div>
+            {integrations.length === 0 ? <p className="report-empty">Nenhuma integração de catálogo configurada ainda.</p> : integrations.map((item) => <article key={item.id}>
+              <div><b>{item.name}</b><small>{item.authType !== 'NONE' ? (item.hasCredentials ? 'Credenciais salvas' : 'Sem credenciais') : 'Sem autenticação'}</small></div>
+              <div><b>{item.providerType}</b><small>{item.baseUrl}</small></div>
+              <div><span className={`pill-status ${item.status.toLowerCase()}`}>{item.status}</span></div>
+              <div><b>{item.lastSyncAt ? interactionDate(item.lastSyncAt) : 'Nunca'}</b><small>{item.lastSyncStatus ?? '—'}</small></div>
+              <div className="integration-actions">
+                <button className="secondary" disabled={testingId === item.id} onClick={() => void testIntegration(item.id)}>{testingId === item.id ? 'Testando...' : 'Testar conexão'}</button>
+                <button className="secondary" disabled={previewingId === item.id} onClick={() => void previewIntegration(item.id)}>{previewingId === item.id ? 'Carregando...' : 'Ver prévia'}</button>
+                <button className="ai-save" disabled={syncingId === item.id} onClick={() => void syncIntegration(item.id)}>{syncingId === item.id ? 'Iniciando...' : 'Sincronizar'}</button>
+                <button className="secondary" onClick={() => void loadExecutions(item.id)}>Execuções</button>
+                <button className="secondary" onClick={() => openIntegrationForm(item)}>Editar</button>
+                <button className="product-delete" onClick={() => void deleteIntegration(item.id, item.name)}>Excluir</button>
+              </div>
+            </article>)}
+          </section>}
+
+          {testResult && <section className={`report-panel test-result-panel ${testResult.success ? 'success' : 'error'}`}>
+            <h4>Resultado do teste de conexão</h4>
+            <p><b>{testResult.success ? 'Sucesso (HTTP ' + testResult.statusCode + ')' : 'Falha'}</b>: {testResult.message}</p>
+            <button className="secondary" onClick={() => setTestResult(undefined)}>Fechar</button>
+          </section>}
+
+          {previewData && <section className="report-panel preview-panel">
+            <div className="report-panel-heading">
+              <div><p className="section-kicker">Prévia</p><h2>Amostragem dos dados importados ({previewData.totalItems} itens)</h2></div>
+              <button className="secondary" onClick={() => setPreviewData(undefined)}>Fechar prévia</button>
+            </div>
+            <div className="preview-table">
+              <div className="products-table-head"><span>SKU</span><span>Título</span><span>Preço</span><span>Estoque</span><span>Validação</span></div>
+              {previewData.items.map((item, idx) => <article key={idx}>
+                <b>{item.sku || '—'}</b>
+                <span>{item.title || '—'}</span>
+                <span>{item.price !== undefined ? formatCurrency(item.price) : '—'}</span>
+                <span>{item.stockQuantity}</span>
+                <span className={item.isValid ? 'text-success' : 'text-error'}>{item.isValid ? 'Válido' : item.validationErrors.join(', ')}</span>
+              </article>)}
+            </div>
+          </section>}
+
+          {viewingExecutionsId && <section className="report-panel executions-panel">
+            <div className="report-panel-heading">
+              <div><p className="section-kicker">Auditoria</p><h2>Histórico de Sincronizações</h2></div>
+              <button className="secondary" onClick={() => setViewingExecutionsId(undefined)}>Fechar</button>
+            </div>
+            <div className="executions-list">
+              {executionsList.length === 0 ? <p className="report-empty">Nenhuma execução registrada ainda.</p> : executionsList.map((exec) => <article key={exec.id} className="execution-card">
+                <div><b>Status: {exec.status}</b> <small>Início: {interactionDate(exec.startedAt)}</small></div>
+                <div className="execution-counts">
+                  <span className="count-badge green">Criados: {exec.createdCount}</span>
+                  <span className="count-badge blue">Atualizados: {exec.updatedCount}</span>
+                  <span className="count-badge gray">Ignorados: {exec.skippedCount}</span>
+                  <span className="count-badge red">Erros: {exec.errorCount}</span>
+                </div>
+                {exec.errorSummary && exec.errorSummary.length > 0 && <details><summary>Resumo de erros ({exec.errorSummary.length})</summary><ul>{exec.errorSummary.map((err, i) => <li key={i}>{err}</li>)}</ul></details>}
+              </article>)}
+            </div>
+          </section>}
+        </div>}
       </section>}
 
       {view === 'reports' && <section className="reports-view" aria-busy={reportLoading}>
