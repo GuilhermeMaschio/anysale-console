@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, cadenceEnrollmentApi, catalogApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type Product, type SalesPlaybook } from './api'
+import { api, cadenceEnrollmentApi, catalogApi, leadCreationApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type Product, type SalesPlaybook } from './api'
 import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
@@ -93,6 +93,9 @@ export default function App() {
   const [colorTheme, setColorTheme] = useState<'light' | 'dark'>('light')
   const [savingTheme, setSavingTheme] = useState(false)
   const [view, setView] = useState<View>('leads')
+  const [leadFormOpen, setLeadFormOpen] = useState(false)
+  const [leadCreating, setLeadCreating] = useState(false)
+  const [leadForm, setLeadForm] = useState({name:'', email:'', phone:'', source:'CONSOLE', desiredCategory:'', desiredTags:''})
   const [products, setProducts] = useState<Product[]>([])
   const [productImageUrls, setProductImageUrls] = useState<Record<string, string>>({})
   const [productsLoading, setProductsLoading] = useState(false)
@@ -184,6 +187,8 @@ export default function App() {
   }
 
   useEffect(() => { if (authenticated) void loadLeads() }, [authenticated])
+
+  const createLead = async () => { setLeadCreating(true); try { const created=await leadCreationApi.create({...leadForm,email:leadForm.email||undefined,phone:leadForm.phone||undefined,desiredCategory:leadForm.desiredCategory||undefined,desiredTags:leadForm.desiredTags.split(',').map(value=>value.trim()).filter(Boolean)}); setLeadFormOpen(false); await loadLeads(); await loadLead(created.id); setNotice({message:'Lead criado com sucesso.',type:'success'}); } catch(error) { setNotice({message:errorMessage(error,'Não foi possível criar o lead'),type:'error'}); } finally { setLeadCreating(false); } }
 
   const loadLeadCadence = async (leadId: string) => {
     setLeadCadenceLoading(true)
@@ -280,6 +285,11 @@ export default function App() {
       await loadTasks()
     } catch (error) { setTasksError(errorMessage(error, 'Não foi possível atualizar a tarefa')) }
     finally { setTaskUpdatingId(undefined) }
+  }
+
+  const openTaskLead = async (task: LeadTask) => {
+    setView('leads')
+    await loadLead(task.leadId)
   }
 
   useEffect(() => {
@@ -515,12 +525,12 @@ export default function App() {
     <main className="dashboard">
       <header className="topbar">
         <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
-        <div className="topbar-actions"><button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
+        <div className="topbar-actions">{view === 'leads' && <button className="ai-save" onClick={() => setLeadFormOpen(true)}>Novo lead</button>}<button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
       {view === 'leads' && notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
 
-      {view === 'leads' && <>
+      {view === 'leads' && <>{leadFormOpen && <section className="report-panel lead-create-form"><div className="report-panel-heading"><div><p className="section-kicker">Novo contato</p><h2>Criar lead</h2></div></div><div className="form-fields"><label>Nome<input value={leadForm.name} onChange={event=>setLeadForm({...leadForm,name:event.target.value})} /></label><label>Telefone<input value={leadForm.phone} onChange={event=>setLeadForm({...leadForm,phone:event.target.value})} /></label><label>Email<input value={leadForm.email} onChange={event=>setLeadForm({...leadForm,email:event.target.value})} /></label><label>Categoria<input value={leadForm.desiredCategory} onChange={event=>setLeadForm({...leadForm,desiredCategory:event.target.value})} placeholder="Ex.: Varejo" /></label><label className="full-width">Tags<input value={leadForm.desiredTags} onChange={event=>setLeadForm({...leadForm,desiredTags:event.target.value})} placeholder="Separadas por vírgula" /></label></div><div className="actions"><button className="secondary" onClick={()=>setLeadFormOpen(false)}>Cancelar</button><button className="ai-save" disabled={leadCreating||!leadForm.name.trim()} onClick={()=>void createLead()}>{leadCreating?'Criando...':'Criar lead'}</button></div></section>}
       <section className="metrics" aria-label="Resumo da operação">
         <article className="metric-card"><div className="metric-icon blue">◫</div><div><p>Leads em acompanhamento</p><strong>{leads.length}</strong><span>Base carregada</span></div></article>
         <article className="metric-card"><div className="metric-icon violet">↗</div><div><p>Potencial em negociação</p><strong>{formatCurrency(estimatedPipeline)}</strong><span>Oportunidades abertas</span></div></article>
@@ -581,8 +591,8 @@ export default function App() {
       {view === 'tasks' && <section className="tasks-view" aria-busy={tasksLoading}>
         {tasksError && <div className="report-state report-error"><p>{tasksError}</p><button className="retry" onClick={() => void loadTasks()}>Tentar novamente</button></div>}
         {!tasksError && <div className="task-columns">
-          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Compartilhada</p><h2>Disponíveis</h2></div><span>{availableTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && availableTasks.length === 0 && <p className="report-empty">Nenhuma tarefa aguardando atendimento.</p>}{availableTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><p>{task.leadName}</p>{task.note && <small>{task.note}</small>}<button className="ai-save" onClick={() => void updateTask(task,'claim')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Assumindo...' : 'Assumir tarefa'}</button></article>)}</section>
-          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Minha carteira</p><h2>Em andamento</h2></div><span>{myTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && myTasks.length === 0 && <p className="report-empty">Você não possui tarefas assumidas.</p>}{myTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><p>{task.leadName}</p>{task.reservationExpiresAt && <small>Reserva até {interactionDate(task.reservationExpiresAt)}</small>}<div className="task-actions"><button className="secondary" onClick={() => void updateTask(task,'snooze')} disabled={taskUpdatingId === task.id}>Adiar 1h</button><button className="secondary" onClick={() => void updateTask(task,'release')} disabled={taskUpdatingId === task.id}>Liberar</button><button className="ai-save" onClick={() => void updateTask(task,'complete')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Salvando...' : 'Concluir'}</button></div></article>)}</section>
+          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Compartilhada</p><h2>Disponíveis</h2></div><span>{availableTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && availableTasks.length === 0 && <p className="report-empty">Nenhuma tarefa aguardando atendimento.</p>}{availableTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><button className="task-lead-link" onClick={() => void openTaskLead(task)} aria-label={`Abrir lead ${task.leadName}`}><span>Lead</span><b>{task.leadName}</b><i>→</i></button>{task.note && <small>{task.note}</small>}<button className="ai-save" onClick={() => void updateTask(task,'claim')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Assumindo...' : 'Assumir tarefa'}</button></article>)}</section>
+          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Minha carteira</p><h2>Em andamento</h2></div><span>{myTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && myTasks.length === 0 && <p className="report-empty">Você não possui tarefas assumidas.</p>}{myTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><button className="task-lead-link" onClick={() => void openTaskLead(task)} aria-label={`Abrir lead ${task.leadName}`}><span>Lead</span><b>{task.leadName}</b><i>→</i></button>{task.reservationExpiresAt && <small>Reserva até {interactionDate(task.reservationExpiresAt)}</small>}<div className="task-actions"><button className="secondary" onClick={() => void updateTask(task,'snooze')} disabled={taskUpdatingId === task.id}>Adiar 1h</button><button className="secondary" onClick={() => void updateTask(task,'release')} disabled={taskUpdatingId === task.id}>Liberar</button><button className="ai-save" onClick={() => void updateTask(task,'complete')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Salvando...' : 'Concluir'}</button></div></article>)}</section>
         </div>}
       </section>}
 
