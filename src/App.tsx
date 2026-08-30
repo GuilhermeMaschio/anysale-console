@@ -4,6 +4,7 @@ import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './a
 import './App.css'
 import './Cadence.css'
 import './TaskQueue.css'
+import './Playbook.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {
@@ -119,6 +120,10 @@ export default function App() {
   const [tasksLoading, setTasksLoading] = useState(false)
   const [tasksError, setTasksError] = useState('')
   const [taskUpdatingId, setTaskUpdatingId] = useState<string>()
+  const [playbookFormOpen, setPlaybookFormOpen] = useState(false)
+  const [playbookSaving, setPlaybookSaving] = useState(false)
+  const [editingPlaybookId, setEditingPlaybookId] = useState<string>()
+  const [playbookForm, setPlaybookForm] = useState({name:'', description:'', categories:'', active:true, defaultPlaybook:false})
 
   const loadLead = async (id: string, openConversation = true) => {
     setSelectedId(id)
@@ -191,6 +196,22 @@ export default function App() {
     try { setCadenceSteps(await api.cadenceSteps(id)) }
     catch (error) { setCadenceError(errorMessage(error, 'Não foi possível carregar as etapas')) }
     finally { setCadenceLoading(false) }
+  }
+
+  const editPlaybook = (playbook?: SalesPlaybook) => {
+    setEditingPlaybookId(playbook?.id)
+    setPlaybookForm(playbook ? {name:playbook.name, description:playbook.description ?? '', categories:playbook.categories.join(', '), active:playbook.active, defaultPlaybook:playbook.defaultPlaybook} : {name:'', description:'', categories:'', active:true, defaultPlaybook:playbooks.length === 0})
+    setPlaybookFormOpen(true)
+  }
+
+  const savePlaybook = async () => {
+    setPlaybookSaving(true); setCadenceError('')
+    try {
+      const body = {...playbookForm, categories:playbookForm.categories.split(',').map((value) => value.trim()).filter(Boolean)}
+      const saved = editingPlaybookId ? await api.updatePlaybook(editingPlaybookId, body) : await api.createPlaybook(body)
+      setPlaybookFormOpen(false); await loadCadences(); await selectPlaybook(saved.id)
+    } catch (error) { setCadenceError(errorMessage(error, 'Não foi possível salvar o playbook')) }
+    finally { setPlaybookSaving(false) }
   }
 
   const saveCadenceSteps = async () => {
@@ -539,10 +560,11 @@ export default function App() {
       {view === 'cadences' && <section className="cadence-view" aria-busy={cadenceLoading}>
         {cadenceError && <div className="report-state report-error"><p>{cadenceError}</p><button className="retry" onClick={() => void loadCadences()}>Tentar novamente</button></div>}
         {!cadenceError && <section className="report-panel cadence-editor">
-          <div className="report-panel-heading"><div><p className="section-kicker">Playbook</p><h2>Etapas de acompanhamento</h2></div><button onClick={() => void loadCadences()} aria-label="Atualizar playbooks">↻</button></div>
+          <div className="report-panel-heading"><div><p className="section-kicker">Playbook</p><h2>Etapas de acompanhamento</h2></div><div className="cadence-header-actions"><button className="secondary" onClick={() => editPlaybook()}>Novo playbook</button><button onClick={() => void loadCadences()} aria-label="Atualizar playbooks">↻</button></div></div>
+          {playbookFormOpen && <section className="playbook-form"><label>Nome<input value={playbookForm.name} onChange={(event) => setPlaybookForm({...playbookForm,name:event.target.value})} placeholder="Ex.: Venda consultiva" /></label><label>Categorias<input value={playbookForm.categories} onChange={(event) => setPlaybookForm({...playbookForm,categories:event.target.value})} placeholder="Ex.: Imóveis, financiamento" /></label><label className="full-width">Descrição<input value={playbookForm.description} onChange={(event) => setPlaybookForm({...playbookForm,description:event.target.value})} placeholder="Quando este playbook deve ser usado" /></label><label className="playbook-check"><input type="checkbox" checked={playbookForm.active} onChange={(event) => setPlaybookForm({...playbookForm,active:event.target.checked})} /> Ativo</label><label className="playbook-check"><input type="checkbox" checked={playbookForm.defaultPlaybook} onChange={(event) => setPlaybookForm({...playbookForm,defaultPlaybook:event.target.checked})} /> Playbook padrão</label><div className="playbook-form-actions"><button className="secondary" onClick={() => setPlaybookFormOpen(false)}>Cancelar</button><button className="ai-save" onClick={() => void savePlaybook()} disabled={playbookSaving || !playbookForm.name.trim()}>{playbookSaving ? 'Salvando...' : 'Salvar playbook'}</button></div></section>}
           {playbooks.length === 0 && !cadenceLoading && <p className="report-empty">Crie um playbook no backend antes de configurar a cadência.</p>}
           {playbooks.length > 0 && <>
-            <label>Playbook comercial<select value={selectedPlaybookId} onChange={(event) => void selectPlaybook(event.target.value)} disabled={cadenceLoading || cadenceSaving}>{playbooks.map((playbook) => <option key={playbook.id} value={playbook.id}>{playbook.name}{playbook.defaultPlaybook ? ' — padrão' : ''}</option>)}</select></label>
+            <div className="playbook-select"><label>Playbook comercial<select value={selectedPlaybookId} onChange={(event) => void selectPlaybook(event.target.value)} disabled={cadenceLoading || cadenceSaving}>{playbooks.map((playbook) => <option key={playbook.id} value={playbook.id}>{playbook.name}{playbook.defaultPlaybook ? ' — padrão' : ''}</option>)}</select></label><button className="secondary" onClick={() => editPlaybook(playbooks.find((playbook) => playbook.id === selectedPlaybookId))}>Editar playbook</button></div>
             <p className="field-help">Cada etapa cria uma tarefa na fila compartilhada após o intervalo informado desde a etapa anterior.</p>
             <div className="cadence-step-list">{cadenceSteps.map((step, index) => <article className="cadence-step" key={step.id ?? index}><b>{index + 1}</b><div className="cadence-step-fields"><label>Após (minutos)<input type="number" min="0" value={step.delayMinutes} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, delayMinutes:Number(event.target.value)} : item))} /></label><label>Tipo<select value={step.taskType} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, taskType:event.target.value} : item))}><option value="FOLLOW_UP">Follow-up</option><option value="WHATSAPP_REPLY">Responder WhatsApp</option><option value="CALL">Ligação</option><option value="SEND_PROPOSAL">Enviar proposta</option><option value="SCHEDULE_MEETING">Agendar reunião</option><option value="REACTIVATE">Reativar</option><option value="OTHER">Outro</option></select></label><label>Prioridade<select value={step.priority} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, priority:event.target.value} : item))}><option value="LOW">Baixa</option><option value="NORMAL">Normal</option><option value="HIGH">Alta</option><option value="URGENT">Urgente</option></select></label><label className="full-width">Tarefa<input value={step.title} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, title:event.target.value} : item))} placeholder="Ex.: Retomar conversa pelo WhatsApp" /></label><label className="full-width">Orientação opcional<input value={step.note ?? ''} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, note:event.target.value} : item))} placeholder="Contexto para quem atender a tarefa" /></label></div><button className="product-delete" onClick={() => setCadenceSteps((items) => items.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover etapa ${index + 1}`}>Remover</button></article>)}</div>
             <div className="cadence-actions"><button className="secondary" onClick={() => setCadenceSteps((items) => [...items, {position:items.length + 1, delayMinutes:1440, title:'Retomar conversa', taskType:'FOLLOW_UP', priority:'NORMAL'}])}>Adicionar etapa</button><button className="ai-save" onClick={() => void saveCadenceSteps()} disabled={cadenceSaving || cadenceSteps.some((step) => !step.title.trim())}>{cadenceSaving ? 'Salvando...' : 'Salvar etapas'}</button></div>
