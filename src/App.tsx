@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, catalogApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type Product, type SalesPlaybook } from './api'
+import { api, cadenceEnrollmentApi, catalogApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type Product, type SalesPlaybook } from './api'
 import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
@@ -121,6 +121,8 @@ export default function App() {
   const [cadenceLoading, setCadenceLoading] = useState(false)
   const [cadenceSaving, setCadenceSaving] = useState(false)
   const [cadenceError, setCadenceError] = useState('')
+  const [automaticEnrollment, setAutomaticEnrollment] = useState(false)
+  const [automaticEnrollmentSaving, setAutomaticEnrollmentSaving] = useState(false)
   const [leadCadence, setLeadCadence] = useState<LeadCadence>()
   const [leadCadenceLoading, setLeadCadenceLoading] = useState(false)
   const [leadTasks, setLeadTasks] = useState<LeadTask[]>([])
@@ -200,7 +202,8 @@ export default function App() {
   const loadCadences = async () => {
     setCadenceLoading(true); setCadenceError('')
     try {
-      const available = await api.playbooks()
+      const [available, enrollment] = await Promise.all([api.playbooks(), cadenceEnrollmentApi.settings().catch(() => ({enabled:false}))])
+      setAutomaticEnrollment(enrollment.enabled)
       setPlaybooks(available)
       const selected = available.find((playbook) => playbook.id === selectedPlaybookId) ?? available[0]
       if (selected) { setSelectedPlaybookId(selected.id); setCadenceSteps(await api.cadenceSteps(selected.id)) }
@@ -238,6 +241,13 @@ export default function App() {
     try { setCadenceSteps(await api.saveCadenceSteps(selectedPlaybookId, cadenceSteps)); setNotice({message:'Etapas da cadência salvas.', type:'success'}) }
     catch (error) { setCadenceError(errorMessage(error, 'Não foi possível salvar as etapas')) }
     finally { setCadenceSaving(false) }
+  }
+
+  const saveAutomaticEnrollment = async (enabled: boolean) => {
+    setAutomaticEnrollmentSaving(true)
+    try { setAutomaticEnrollment((await cadenceEnrollmentApi.save(enabled)).enabled); setNotice({message: enabled ? 'Novos leads entrarão automaticamente na cadência.' : 'A entrada automática foi desativada.', type:'success'}) }
+    catch (error) { setCadenceError(errorMessage(error, 'Não foi possível atualizar a automação')) }
+    finally { setAutomaticEnrollmentSaving(false) }
   }
 
   const operateLeadCadence = async (action: 'start' | 'pause' | 'resume' | 'cancel') => {
@@ -579,7 +589,7 @@ export default function App() {
       {view === 'cadences' && <section className="cadence-view" aria-busy={cadenceLoading}>
         {cadenceError && <div className="report-state report-error"><p>{cadenceError}</p><button className="retry" onClick={() => void loadCadences()}>Tentar novamente</button></div>}
         {!cadenceError && <section className="report-panel cadence-editor">
-          <div className="report-panel-heading"><div><p className="section-kicker">Playbook</p><h2>Etapas de acompanhamento</h2></div><div className="cadence-header-actions"><button className="secondary" onClick={() => editPlaybook()}>Novo playbook</button><button onClick={() => void loadCadences()} aria-label="Atualizar playbooks">↻</button></div></div>
+          <div className="report-panel-heading"><div><p className="section-kicker">Playbook</p><h2>Etapas de acompanhamento</h2></div><div className="cadence-header-actions"><button className="secondary" onClick={() => editPlaybook()}>Novo playbook</button><button onClick={() => void loadCadences()} aria-label="Atualizar playbooks">↻</button></div></div><label className="automatic-enrollment"><input type="checkbox" checked={automaticEnrollment} disabled={automaticEnrollmentSaving} onChange={(event) => void saveAutomaticEnrollment(event.target.checked)} /><span><b>Iniciar cadência automaticamente</b><small>Aplica o playbook da categoria — ou o padrão — aos novos leads.</small></span></label>
           {playbookFormOpen && <section className="playbook-form"><label>Nome<input value={playbookForm.name} onChange={(event) => setPlaybookForm({...playbookForm,name:event.target.value})} placeholder="Ex.: Venda consultiva" /></label><label>Categorias<input value={playbookForm.categories} onChange={(event) => setPlaybookForm({...playbookForm,categories:event.target.value})} placeholder="Ex.: Imóveis, financiamento" /></label><label className="full-width">Descrição<input value={playbookForm.description} onChange={(event) => setPlaybookForm({...playbookForm,description:event.target.value})} placeholder="Quando este playbook deve ser usado" /></label><label className="playbook-check"><input type="checkbox" checked={playbookForm.active} onChange={(event) => setPlaybookForm({...playbookForm,active:event.target.checked})} /> Ativo</label><label className="playbook-check"><input type="checkbox" checked={playbookForm.defaultPlaybook} onChange={(event) => setPlaybookForm({...playbookForm,defaultPlaybook:event.target.checked})} /> Playbook padrão</label><div className="playbook-form-actions"><button className="secondary" onClick={() => setPlaybookFormOpen(false)}>Cancelar</button><button className="ai-save" onClick={() => void savePlaybook()} disabled={playbookSaving || !playbookForm.name.trim()}>{playbookSaving ? 'Salvando...' : 'Salvar playbook'}</button></div></section>}
           {playbooks.length === 0 && !cadenceLoading && <p className="report-empty">Crie um playbook no backend antes de configurar a cadência.</p>}
           {playbooks.length > 0 && <>
