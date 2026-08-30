@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { api, catalogApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type Product, type SalesPlaybook } from './api'
+import { api, catalogApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type Product, type SalesPlaybook } from './api'
 import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
+import './TaskQueue.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {
@@ -14,7 +15,7 @@ const stageLabels: Record<string, string> = {
   LOST: 'Fechado — perdido',
 }
 type Notice = { message: string; type: 'error' | 'success' }
-type View = 'leads' | 'cadences' | 'products' | 'reports' | 'ai'
+type View = 'leads' | 'tasks' | 'cadences' | 'products' | 'reports' | 'ai'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -113,6 +114,11 @@ export default function App() {
   const [cadenceError, setCadenceError] = useState('')
   const [leadCadence, setLeadCadence] = useState<LeadCadence>()
   const [leadCadenceLoading, setLeadCadenceLoading] = useState(false)
+  const [availableTasks, setAvailableTasks] = useState<LeadTask[]>([])
+  const [myTasks, setMyTasks] = useState<LeadTask[]>([])
+  const [tasksLoading, setTasksLoading] = useState(false)
+  const [tasksError, setTasksError] = useState('')
+  const [taskUpdatingId, setTaskUpdatingId] = useState<string>()
 
   const loadLead = async (id: string, openConversation = true) => {
     setSelectedId(id)
@@ -205,6 +211,27 @@ export default function App() {
     finally { setLeadCadenceLoading(false) }
   }
 
+  const loadTasks = async () => {
+    setTasksLoading(true); setTasksError('')
+    try {
+      const [available, mine] = await Promise.all([api.tasks('available'), api.tasks('mine')])
+      setAvailableTasks(available.content); setMyTasks(mine.content)
+    } catch (error) { setTasksError(errorMessage(error, 'Não foi possível carregar a fila de tarefas')) }
+    finally { setTasksLoading(false) }
+  }
+
+  const updateTask = async (task: LeadTask, action: 'claim' | 'release' | 'complete' | 'snooze') => {
+    setTaskUpdatingId(task.id); setTasksError('')
+    try {
+      if (action === 'claim') await api.claimTask(task.id)
+      if (action === 'release') await api.releaseTask(task.id)
+      if (action === 'complete') await api.completeTask(task.id, 'OTHER')
+      if (action === 'snooze') await api.snoozeTask(task.id, new Date(Date.now() + 60 * 60 * 1000).toISOString(), 'Adiado pelo atendente')
+      await loadTasks()
+    } catch (error) { setTasksError(errorMessage(error, 'Não foi possível atualizar a tarefa')) }
+    finally { setTaskUpdatingId(undefined) }
+  }
+
   useEffect(() => {
     if (!authenticated) return
     void api.consolePreference().then((preference) => setColorTheme(preference.colorTheme)).catch(() => undefined)
@@ -236,6 +263,7 @@ export default function App() {
 
   useEffect(() => { if (authenticated && view === 'reports') void loadReport() }, [authenticated, view])
   useEffect(() => { if (authenticated && view === 'cadences') void loadCadences() }, [authenticated, view])
+  useEffect(() => { if (authenticated && view === 'tasks') void loadTasks() }, [authenticated, view])
   const loadProducts = async () => { setProductsLoading(true); setProductsError(''); try { setProducts(await catalogApi.products()) } catch (error) { setProductsError(errorMessage(error, 'Não foi possível carregar os produtos')) } finally { setProductsLoading(false) } }
   useEffect(() => { if (authenticated && view === 'products') void loadProducts() }, [authenticated, view])
   useEffect(() => {
@@ -425,6 +453,7 @@ export default function App() {
       <div className="workspace-name"><span className="workspace-dot" /><span className="workspace-label">Operação comercial</span></div>
       <nav aria-label="Navegação principal">
         <button className={`nav-item ${view === 'leads' ? 'active' : ''}`} title="Leads" onClick={() => setView('leads')}><span className="nav-icon">◫</span><span className="nav-label">Leads</span><span className="nav-count">{leads.length}</span></button>
+        <button className={`nav-item ${view === 'tasks' ? 'active' : ''}`} title="Fila de tarefas" onClick={() => setView('tasks')}><span className="nav-icon">✓</span><span className="nav-label">Tarefas</span>{myTasks.length > 0 && <span className="nav-count">{myTasks.length}</span>}</button>
         <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>
         <button className={`nav-item ${view === 'products' ? 'active' : ''}`} title="Produtos e estoque" onClick={() => setView('products')}><span className="nav-icon">▣</span><span className="nav-label">Produtos</span></button>
         <button className={`nav-item ${view === 'reports' ? 'active' : ''}`} title="Relatórios" onClick={() => setView('reports')}><span className="nav-icon">▥</span><span className="nav-label">Relatórios</span></button>
@@ -435,7 +464,7 @@ export default function App() {
 
     <main className="dashboard">
       <header className="topbar">
-        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
+        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
         <div className="topbar-actions"><button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
@@ -498,6 +527,14 @@ export default function App() {
         {conversationOpen && <button className="conversation-scrim" onClick={() => setConversationOpen(false)} aria-label="Fechar painel de atendimento" />}
       </div>
       </>}
+
+      {view === 'tasks' && <section className="tasks-view" aria-busy={tasksLoading}>
+        {tasksError && <div className="report-state report-error"><p>{tasksError}</p><button className="retry" onClick={() => void loadTasks()}>Tentar novamente</button></div>}
+        {!tasksError && <div className="task-columns">
+          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Compartilhada</p><h2>Disponíveis</h2></div><span>{availableTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && availableTasks.length === 0 && <p className="report-empty">Nenhuma tarefa aguardando atendimento.</p>}{availableTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><p>{task.leadName}</p>{task.note && <small>{task.note}</small>}<button className="ai-save" onClick={() => void updateTask(task,'claim')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Assumindo...' : 'Assumir tarefa'}</button></article>)}</section>
+          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Minha carteira</p><h2>Em andamento</h2></div><span>{myTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && myTasks.length === 0 && <p className="report-empty">Você não possui tarefas assumidas.</p>}{myTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><p>{task.leadName}</p>{task.reservationExpiresAt && <small>Reserva até {interactionDate(task.reservationExpiresAt)}</small>}<div className="task-actions"><button className="secondary" onClick={() => void updateTask(task,'snooze')} disabled={taskUpdatingId === task.id}>Adiar 1h</button><button className="secondary" onClick={() => void updateTask(task,'release')} disabled={taskUpdatingId === task.id}>Liberar</button><button className="ai-save" onClick={() => void updateTask(task,'complete')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Salvando...' : 'Concluir'}</button></div></article>)}</section>
+        </div>}
+      </section>}
 
       {view === 'cadences' && <section className="cadence-view" aria-busy={cadenceLoading}>
         {cadenceError && <div className="report-state report-error"><p>{cadenceError}</p><button className="retry" onClick={() => void loadCadences()}>Tentar novamente</button></div>}
