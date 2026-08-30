@@ -6,6 +6,7 @@ import './Cadence.css'
 import './TaskQueue.css'
 import './Playbook.css'
 import './ButtonStyles.css'
+import './LeadWorkspace.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {

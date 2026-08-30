@@ -1,0 +1,26 @@
+/* Painel de atendimento: uma superfície clara e focada sobre o funil. */
+.detail-panel{
+  top:16px!important;right:16px!important;bottom:16px!important;left:16px!important;width:min(960px,calc(100vw - 32px))!important;height:fit-content;max-height:calc(100vh - 32px);margin:auto!important;transform:translateY(22px) scale(.98)!important;border:1px solid rgba(157,182,216,.65)!important;border-radius:20px!important;background:#f8fbff!important;box-shadow:0 28px 80px rgba(1,8,23,.48)!important
+}
+.detail-panel.open{transform:translateY(0) scale(1)!important}
+.detail-panel>.conversation-header{
+  min-height:82px;padding:18px 20px;border:0!important;border-bottom:1px solid #dde8f3!important;border-radius:19px 19px 0 0;background:linear-gradient(135deg,#fff 0%,#eff8ff 100%)!important;box-shadow:inset 0 -1px rgba(255,255,255,.8)
+}
+.detail-panel .detail-avatar{width:46px;height:46px;border-radius:14px;background:linear-gradient(145deg,#e1f5ff,#dff9ed);color:#12647a;box-shadow:0 7px 16px rgba(40,118,151,.14)}
+.detail-panel .conversation-identity h2{color:#182c48!important;font-size:18px;letter-spacing:-.035em}.detail-panel .lead-value{color:#47708b!important;font-weight:800}
+.detail-panel .details-toggle{min-height:36px;margin-left:auto;border:1px solid #cbdcec;background:#fff;color:#385b7a;box-shadow:0 5px 13px rgba(31,72,113,.09)}
+.detail-panel .conversation-close{
+  width:38px;height:38px;min-height:38px;border:1px solid #cbdcec;border-radius:12px;background:#fff;color:#59718c;font-size:23px;font-weight:400;box-shadow:0 5px 13px rgba(31,72,113,.09)
+}
+.detail-panel .conversation-close:hover{border-color:#86b4d4;background:#eef8ff;color:#12647a}
+.detail-panel .conversation-area{min-height:360px;padding:22px 24px;background:linear-gradient(150deg,#f4faff 0%,#f9fcff 58%,#f2fbf7 100%)!important}
+.detail-panel .conversation-area::before{height:4px;width:54px;margin-bottom:18px;background:linear-gradient(90deg,#49cbe8,#6ce7ad);opacity:1}
+.detail-panel .conversation-heading h3{color:#1b3854!important;font-size:14px}.detail-panel .conversation-empty{padding:30px;color:#6c849b}.detail-panel .conversation-empty span{width:38px;height:38px;margin:0 auto 11px;display:grid;place-items:center;border-radius:50%;background:#e6f4fb;color:#4b9db6;font-size:17px}
+.detail-panel .message-bubble{box-shadow:0 5px 14px rgba(31,72,113,.06)}
+.detail-panel .composer{padding:16px 20px 17px;border-top:1px solid #d8e8e1!important;background:#fff!important}.detail-panel .composer textarea{min-height:82px;border-radius:12px!important;background:#f6fbf8!important;color:#203a50!important}.detail-panel .composer-footer{margin-top:10px;color:#668074!important}
+.detail-panel .details-drawer{border-top:1px solid #dce8f1!important;background:#fff!important}.detail-panel .details-drawer-heading{padding:16px 20px;background:#fff!important;color:#42607b!important}.detail-panel .details-drawer-heading b{color:#1c3854!important}.detail-panel .details-content{padding:4px 20px 20px;border-top:1px solid #edf3f7}
+.detail-panel .lead-workspace{border-color:#cfe5ec;background:linear-gradient(135deg,#f2fbff,#f4fcf8)}
+
+@media(max-width:640px){
+  .detail-panel{width:100%;max-height:none;border-radius:0!important}.detail-panel>.conversation-header{min-height:72px;padding:13px 15px;border-radius:0}.detail-panel .detail-avatar{width:40px;height:40px;border-radius:12px}.detail-panel .conversation-area{min-height:calc(100vh - 278px);padding:18px 15px}.detail-panel .composer,.detail-panel .details-drawer-heading,.detail-panel .details-content{padding-left:15px;padding-right:15px}.detail-panel .conversation-close{width:36px;height:36px;min-height:36px}
+}
