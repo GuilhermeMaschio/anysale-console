@@ -39,6 +39,14 @@ function stageLabel(stage: string) {
   return stageLabels[stage] ?? stage
 }
 
+function cadenceStatusLabel(status: string) {
+  return ({ ACTIVE: 'Em andamento', PAUSED: 'Aguardando decisão', COMPLETED: 'Concluída', CANCELLED: 'Encerrada' } as Record<string, string>)[status] ?? status
+}
+
+function taskStatusLabel(status: string) {
+  return ({ OPEN: 'Na fila', ASSIGNED: 'Em atendimento', COMPLETED: 'Concluída' } as Record<string, string>)[status] ?? status
+}
+
 function reportErrorMessage(error: unknown) {
   if (error instanceof Error && /API (401|403)/.test(error.message)) return 'O relatório não está autorizado pelo backend. Verifique a configuração de acesso do serviço; não use tokens secretos no front-end.'
   return errorMessage(error, 'Não foi possível carregar os relatórios')
@@ -115,6 +123,8 @@ export default function App() {
   const [cadenceError, setCadenceError] = useState('')
   const [leadCadence, setLeadCadence] = useState<LeadCadence>()
   const [leadCadenceLoading, setLeadCadenceLoading] = useState(false)
+  const [leadTasks, setLeadTasks] = useState<LeadTask[]>([])
+  const [leadTasksLoading, setLeadTasksLoading] = useState(false)
   const [availableTasks, setAvailableTasks] = useState<LeadTask[]>([])
   const [myTasks, setMyTasks] = useState<LeadTask[]>([])
   const [tasksLoading, setTasksLoading] = useState(false)
@@ -137,6 +147,7 @@ export default function App() {
     if (leadResult.status === 'fulfilled') {
       setLead(leadResult.value)
       void loadLeadCadence(leadResult.value.id)
+      void loadLeadTasks(leadResult.value.id)
     } else {
       setLead(undefined)
       setNotice({ message: errorMessage(leadResult.reason, 'Não foi possível carregar os dados do lead'), type: 'error' })
@@ -177,6 +188,13 @@ export default function App() {
     try { setLeadCadence(await api.leadCadence(leadId)) }
     catch { setLeadCadence(undefined) }
     finally { setLeadCadenceLoading(false) }
+  }
+
+  const loadLeadTasks = async (leadId: string) => {
+    setLeadTasksLoading(true)
+    try { setLeadTasks(await api.leadTasks(leadId)) }
+    catch { setLeadTasks([]) }
+    finally { setLeadTasksLoading(false) }
   }
 
   const loadCadences = async () => {
@@ -228,6 +246,7 @@ export default function App() {
     try {
       const call = action === 'start' ? api.startCadence : action === 'pause' ? api.pauseCadence : action === 'resume' ? api.resumeCadence : api.cancelCadence
       setLeadCadence(await call(lead.id))
+      await loadLeadTasks(lead.id)
     } catch (error) { setNotice({message:errorMessage(error, 'Não foi possível atualizar a cadência'), type:'error'}) }
     finally { setLeadCadenceLoading(false) }
   }
@@ -535,7 +554,7 @@ export default function App() {
 
             <section className={`details-drawer ${detailsOpen ? 'open' : ''}`}>
               <button className="details-drawer-heading" onClick={() => setDetailsOpen((isOpen) => !isOpen)} aria-expanded={detailsOpen}><span><b>Informações comerciais</b><small>Etapa, responsável e valores</small></span><span>{detailsOpen ? 'Ocultar' : 'Ver detalhes'} <i>{detailsOpen ? '⌃' : '⌄'}</i></span></button>
-              {detailsOpen && <div className="details-content"><section className="lead-cadence-card"><div><b>Cadência comercial</b><small>{leadCadenceLoading ? 'Consultando...' : leadCadence ? `${leadCadence.playbookName} · ${leadCadence.status}` : 'Nenhuma cadência ativa'}</small>{leadCadence?.nextActionAt && <small>Próxima tarefa: {interactionDate(leadCadence.nextActionAt)}</small>}</div><div className="lead-cadence-actions">{!leadCadence && <button className="secondary" onClick={() => void operateLeadCadence('start')} disabled={leadCadenceLoading}>Iniciar</button>}{leadCadence?.status === 'ACTIVE' && <button className="secondary" onClick={() => void operateLeadCadence('pause')} disabled={leadCadenceLoading}>Pausar</button>}{leadCadence?.status === 'PAUSED' && <button className="secondary" onClick={() => void operateLeadCadence('resume')} disabled={leadCadenceLoading}>Retomar</button>}{leadCadence && !['COMPLETED','CANCELLED'].includes(leadCadence.status) && <button className="secondary" onClick={() => void operateLeadCadence('cancel')} disabled={leadCadenceLoading}>Cancelar</button>}</div></section><div className="form-fields">
+              {detailsOpen && <div className="details-content"><section className="lead-workspace"><div className="lead-workspace-header"><div><p className="section-kicker">Próximo passo comercial</p><h3>Cadência e tarefas</h3></div>{leadCadence && <span className={`cadence-status cadence-status-${leadCadence.status.toLowerCase()}`}>{cadenceStatusLabel(leadCadence.status)}</span>}</div><div className="lead-cadence-card"><div><b>{leadCadenceLoading ? 'Consultando cadência...' : leadCadence?.playbookName ?? 'Nenhuma cadência ativa'}</b><small>{leadCadence?.nextActionAt ? `Próxima ação: ${interactionDate(leadCadence.nextActionAt)}` : leadCadence ? 'Não há próxima ação agendada.' : 'Inicie uma cadência para organizar os próximos contatos.'}</small></div><div className="lead-cadence-actions">{!leadCadence && <button className="secondary" onClick={() => void operateLeadCadence('start')} disabled={leadCadenceLoading}>Iniciar cadência</button>}{leadCadence?.status === 'ACTIVE' && <button className="secondary" onClick={() => void operateLeadCadence('pause')} disabled={leadCadenceLoading}>Pausar</button>}{leadCadence?.status === 'PAUSED' && <button className="secondary" onClick={() => void operateLeadCadence('resume')} disabled={leadCadenceLoading}>Retomar</button>}{leadCadence && !['COMPLETED','CANCELLED'].includes(leadCadence.status) && <button className="secondary" onClick={() => void operateLeadCadence('cancel')} disabled={leadCadenceLoading}>Encerrar</button>}</div></div><div className="lead-task-history"><div className="lead-task-history-heading"><b>Histórico de tarefas</b><span>{leadTasksLoading ? 'Carregando...' : `${leadTasks.length} ${leadTasks.length === 1 ? 'tarefa' : 'tarefas'}`}</span></div>{!leadTasksLoading && leadTasks.length === 0 && <p className="lead-task-empty">Nenhuma tarefa criada para este lead ainda.</p>}{leadTasks.slice(0, 4).map((task) => <article className="lead-task-item" key={task.id}><span className={`lead-task-dot lead-task-${task.status.toLowerCase()}`} /><div><b>{task.title}</b><small>{task.taskType.replaceAll('_', ' ')} · {taskStatusLabel(task.status)}</small></div><time>{interactionDate(task.completedAt ?? task.dueAt)}</time></article>)}</div></section><div className="form-fields">
                 <label>Responsável<select value={lead.assignedTo ?? ''} onChange={(event) => void save({ assignedTo: event.target.value })} disabled={saving}><option value="">Sem responsável</option><option>Guilherme Maschio</option><option>Time Comercial</option></select></label>
                 <label>Etapa<select value={lead.stage} onChange={(event) => void changeStage(event.target.value)} disabled={saving}>{stages.map((item) => <option key={item} value={item}>{stageLabel(item)}</option>)}</select></label>
                 <label>Potencial em negociação<input type="number" value={lead.estimatedValue ?? ''} onChange={(event) => setLead({ ...lead, estimatedValue: event.target.value === '' ? undefined : Number(event.target.value) })} onBlur={(event) => void save({ estimatedValue: event.target.value === '' ? undefined : Number(event.target.value) })} disabled={saving} /></label>
