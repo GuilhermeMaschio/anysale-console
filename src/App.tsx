@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { api, catalogApi, type AiSettings, type AiSkill, type AiUsage, type Funnel, type Interaction, type LeadApi, type Product } from './api'
+import { api, catalogApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type Product, type SalesPlaybook } from './api'
 import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
+import './Cadence.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {
@@ -13,7 +14,7 @@ const stageLabels: Record<string, string> = {
   LOST: 'Fechado — perdido',
 }
 type Notice = { message: string; type: 'error' | 'success' }
-type View = 'leads' | 'products' | 'reports' | 'ai'
+type View = 'leads' | 'cadences' | 'products' | 'reports' | 'ai'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -104,6 +105,14 @@ export default function App() {
   const [aiSaving, setAiSaving] = useState(false)
   const [aiError, setAiError] = useState('')
   const [notice, setNotice] = useState<Notice>()
+  const [playbooks, setPlaybooks] = useState<SalesPlaybook[]>([])
+  const [selectedPlaybookId, setSelectedPlaybookId] = useState('')
+  const [cadenceSteps, setCadenceSteps] = useState<CadenceStep[]>([])
+  const [cadenceLoading, setCadenceLoading] = useState(false)
+  const [cadenceSaving, setCadenceSaving] = useState(false)
+  const [cadenceError, setCadenceError] = useState('')
+  const [leadCadence, setLeadCadence] = useState<LeadCadence>()
+  const [leadCadenceLoading, setLeadCadenceLoading] = useState(false)
 
   const loadLead = async (id: string, openConversation = true) => {
     setSelectedId(id)
@@ -116,6 +125,7 @@ export default function App() {
     const [leadResult, interactionsResult] = await Promise.allSettled([api.lead(id), api.interactions(id)])
     if (leadResult.status === 'fulfilled') {
       setLead(leadResult.value)
+      void loadLeadCadence(leadResult.value.id)
     } else {
       setLead(undefined)
       setNotice({ message: errorMessage(leadResult.reason, 'Não foi possível carregar os dados do lead'), type: 'error' })
@@ -151,6 +161,50 @@ export default function App() {
 
   useEffect(() => { if (authenticated) void loadLeads() }, [authenticated])
 
+  const loadLeadCadence = async (leadId: string) => {
+    setLeadCadenceLoading(true)
+    try { setLeadCadence(await api.leadCadence(leadId)) }
+    catch { setLeadCadence(undefined) }
+    finally { setLeadCadenceLoading(false) }
+  }
+
+  const loadCadences = async () => {
+    setCadenceLoading(true); setCadenceError('')
+    try {
+      const available = await api.playbooks()
+      setPlaybooks(available)
+      const selected = available.find((playbook) => playbook.id === selectedPlaybookId) ?? available[0]
+      if (selected) { setSelectedPlaybookId(selected.id); setCadenceSteps(await api.cadenceSteps(selected.id)) }
+      else setCadenceSteps([])
+    } catch (error) { setCadenceError(errorMessage(error, 'Não foi possível carregar os playbooks')) }
+    finally { setCadenceLoading(false) }
+  }
+
+  const selectPlaybook = async (id: string) => {
+    setSelectedPlaybookId(id); setCadenceLoading(true); setCadenceError('')
+    try { setCadenceSteps(await api.cadenceSteps(id)) }
+    catch (error) { setCadenceError(errorMessage(error, 'Não foi possível carregar as etapas')) }
+    finally { setCadenceLoading(false) }
+  }
+
+  const saveCadenceSteps = async () => {
+    if (!selectedPlaybookId) return
+    setCadenceSaving(true); setCadenceError('')
+    try { setCadenceSteps(await api.saveCadenceSteps(selectedPlaybookId, cadenceSteps)); setNotice({message:'Etapas da cadência salvas.', type:'success'}) }
+    catch (error) { setCadenceError(errorMessage(error, 'Não foi possível salvar as etapas')) }
+    finally { setCadenceSaving(false) }
+  }
+
+  const operateLeadCadence = async (action: 'start' | 'pause' | 'resume' | 'cancel') => {
+    if (!lead) return
+    setLeadCadenceLoading(true)
+    try {
+      const call = action === 'start' ? api.startCadence : action === 'pause' ? api.pauseCadence : action === 'resume' ? api.resumeCadence : api.cancelCadence
+      setLeadCadence(await call(lead.id))
+    } catch (error) { setNotice({message:errorMessage(error, 'Não foi possível atualizar a cadência'), type:'error'}) }
+    finally { setLeadCadenceLoading(false) }
+  }
+
   useEffect(() => {
     if (!authenticated) return
     void api.consolePreference().then((preference) => setColorTheme(preference.colorTheme)).catch(() => undefined)
@@ -181,6 +235,7 @@ export default function App() {
   }
 
   useEffect(() => { if (authenticated && view === 'reports') void loadReport() }, [authenticated, view])
+  useEffect(() => { if (authenticated && view === 'cadences') void loadCadences() }, [authenticated, view])
   const loadProducts = async () => { setProductsLoading(true); setProductsError(''); try { setProducts(await catalogApi.products()) } catch (error) { setProductsError(errorMessage(error, 'Não foi possível carregar os produtos')) } finally { setProductsLoading(false) } }
   useEffect(() => { if (authenticated && view === 'products') void loadProducts() }, [authenticated, view])
   useEffect(() => {
@@ -370,6 +425,7 @@ export default function App() {
       <div className="workspace-name"><span className="workspace-dot" /><span className="workspace-label">Operação comercial</span></div>
       <nav aria-label="Navegação principal">
         <button className={`nav-item ${view === 'leads' ? 'active' : ''}`} title="Leads" onClick={() => setView('leads')}><span className="nav-icon">◫</span><span className="nav-label">Leads</span><span className="nav-count">{leads.length}</span></button>
+        <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>
         <button className={`nav-item ${view === 'products' ? 'active' : ''}`} title="Produtos e estoque" onClick={() => setView('products')}><span className="nav-icon">▣</span><span className="nav-label">Produtos</span></button>
         <button className={`nav-item ${view === 'reports' ? 'active' : ''}`} title="Relatórios" onClick={() => setView('reports')}><span className="nav-icon">▥</span><span className="nav-label">Relatórios</span></button>
         {isAdministrator() && <button className={`nav-item ${view === 'ai' ? 'active' : ''}`} title="Configuração de IA" onClick={() => setView('ai')}><span className="nav-icon">✦</span><span className="nav-label">IA</span></button>}
@@ -379,7 +435,7 @@ export default function App() {
 
     <main className="dashboard">
       <header className="topbar">
-        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'products' ? 'Produtos e estoque' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
+        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
         <div className="topbar-actions"><button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
@@ -429,7 +485,7 @@ export default function App() {
 
             <section className={`details-drawer ${detailsOpen ? 'open' : ''}`}>
               <button className="details-drawer-heading" onClick={() => setDetailsOpen((isOpen) => !isOpen)} aria-expanded={detailsOpen}><span><b>Informações comerciais</b><small>Etapa, responsável e valores</small></span><span>{detailsOpen ? 'Ocultar' : 'Ver detalhes'} <i>{detailsOpen ? '⌃' : '⌄'}</i></span></button>
-              {detailsOpen && <div className="details-content"><div className="form-fields">
+              {detailsOpen && <div className="details-content"><section className="lead-cadence-card"><div><b>Cadência comercial</b><small>{leadCadenceLoading ? 'Consultando...' : leadCadence ? `${leadCadence.playbookName} · ${leadCadence.status}` : 'Nenhuma cadência ativa'}</small>{leadCadence?.nextActionAt && <small>Próxima tarefa: {interactionDate(leadCadence.nextActionAt)}</small>}</div><div className="lead-cadence-actions">{!leadCadence && <button className="secondary" onClick={() => void operateLeadCadence('start')} disabled={leadCadenceLoading}>Iniciar</button>}{leadCadence?.status === 'ACTIVE' && <button className="secondary" onClick={() => void operateLeadCadence('pause')} disabled={leadCadenceLoading}>Pausar</button>}{leadCadence?.status === 'PAUSED' && <button className="secondary" onClick={() => void operateLeadCadence('resume')} disabled={leadCadenceLoading}>Retomar</button>}{leadCadence && !['COMPLETED','CANCELLED'].includes(leadCadence.status) && <button className="secondary" onClick={() => void operateLeadCadence('cancel')} disabled={leadCadenceLoading}>Cancelar</button>}</div></section><div className="form-fields">
                 <label>Responsável<select value={lead.assignedTo ?? ''} onChange={(event) => void save({ assignedTo: event.target.value })} disabled={saving}><option value="">Sem responsável</option><option>Guilherme Maschio</option><option>Time Comercial</option></select></label>
                 <label>Etapa<select value={lead.stage} onChange={(event) => void changeStage(event.target.value)} disabled={saving}>{stages.map((item) => <option key={item} value={item}>{stageLabel(item)}</option>)}</select></label>
                 <label>Potencial em negociação<input type="number" value={lead.estimatedValue ?? ''} onChange={(event) => setLead({ ...lead, estimatedValue: event.target.value === '' ? undefined : Number(event.target.value) })} onBlur={(event) => void save({ estimatedValue: event.target.value === '' ? undefined : Number(event.target.value) })} disabled={saving} /></label>
@@ -442,6 +498,20 @@ export default function App() {
         {conversationOpen && <button className="conversation-scrim" onClick={() => setConversationOpen(false)} aria-label="Fechar painel de atendimento" />}
       </div>
       </>}
+
+      {view === 'cadences' && <section className="cadence-view" aria-busy={cadenceLoading}>
+        {cadenceError && <div className="report-state report-error"><p>{cadenceError}</p><button className="retry" onClick={() => void loadCadences()}>Tentar novamente</button></div>}
+        {!cadenceError && <section className="report-panel cadence-editor">
+          <div className="report-panel-heading"><div><p className="section-kicker">Playbook</p><h2>Etapas de acompanhamento</h2></div><button onClick={() => void loadCadences()} aria-label="Atualizar playbooks">↻</button></div>
+          {playbooks.length === 0 && !cadenceLoading && <p className="report-empty">Crie um playbook no backend antes de configurar a cadência.</p>}
+          {playbooks.length > 0 && <>
+            <label>Playbook comercial<select value={selectedPlaybookId} onChange={(event) => void selectPlaybook(event.target.value)} disabled={cadenceLoading || cadenceSaving}>{playbooks.map((playbook) => <option key={playbook.id} value={playbook.id}>{playbook.name}{playbook.defaultPlaybook ? ' — padrão' : ''}</option>)}</select></label>
+            <p className="field-help">Cada etapa cria uma tarefa na fila compartilhada após o intervalo informado desde a etapa anterior.</p>
+            <div className="cadence-step-list">{cadenceSteps.map((step, index) => <article className="cadence-step" key={step.id ?? index}><b>{index + 1}</b><div className="cadence-step-fields"><label>Após (minutos)<input type="number" min="0" value={step.delayMinutes} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, delayMinutes:Number(event.target.value)} : item))} /></label><label>Tipo<select value={step.taskType} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, taskType:event.target.value} : item))}><option value="FOLLOW_UP">Follow-up</option><option value="WHATSAPP_REPLY">Responder WhatsApp</option><option value="CALL">Ligação</option><option value="SEND_PROPOSAL">Enviar proposta</option><option value="SCHEDULE_MEETING">Agendar reunião</option><option value="REACTIVATE">Reativar</option><option value="OTHER">Outro</option></select></label><label>Prioridade<select value={step.priority} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, priority:event.target.value} : item))}><option value="LOW">Baixa</option><option value="NORMAL">Normal</option><option value="HIGH">Alta</option><option value="URGENT">Urgente</option></select></label><label className="full-width">Tarefa<input value={step.title} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, title:event.target.value} : item))} placeholder="Ex.: Retomar conversa pelo WhatsApp" /></label><label className="full-width">Orientação opcional<input value={step.note ?? ''} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, note:event.target.value} : item))} placeholder="Contexto para quem atender a tarefa" /></label></div><button className="product-delete" onClick={() => setCadenceSteps((items) => items.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover etapa ${index + 1}`}>Remover</button></article>)}</div>
+            <div className="cadence-actions"><button className="secondary" onClick={() => setCadenceSteps((items) => [...items, {position:items.length + 1, delayMinutes:1440, title:'Retomar conversa', taskType:'FOLLOW_UP', priority:'NORMAL'}])}>Adicionar etapa</button><button className="ai-save" onClick={() => void saveCadenceSteps()} disabled={cadenceSaving || cadenceSteps.some((step) => !step.title.trim())}>{cadenceSaving ? 'Salvando...' : 'Salvar etapas'}</button></div>
+          </>}
+        </section>}
+      </section>}
 
       {view === 'products' && <section className="products-view" aria-busy={productsLoading}>
         <div className="products-toolbar"><p className="field-help">O estoque disponível é a base para sugestões comerciais futuras da IA.</p><button className="ai-save" onClick={() => setProductFormOpen((open) => !open)}>{productFormOpen ? 'Cancelar' : 'Novo produto'}</button></div>
