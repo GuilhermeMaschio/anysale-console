@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, cadenceEnrollmentApi, catalogApi, leadCreationApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type Product, type SalesPlaybook } from './api'
+import { api, cadenceEnrollmentApi, catalogApi, leadCreationApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
 import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
@@ -8,6 +8,7 @@ import './Playbook.css'
 import './ButtonStyles.css'
 import './LeadWorkspace.css'
 import './OperationalDashboard.css'
+import './UserManagement.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {
@@ -19,7 +20,7 @@ const stageLabels: Record<string, string> = {
   LOST: 'Fechado — perdido',
 }
 type Notice = { message: string; type: 'error' | 'success' }
-type View = 'dashboard' | 'leads' | 'tasks' | 'cadences' | 'products' | 'ai'
+type View = 'dashboard' | 'leads' | 'tasks' | 'cadences' | 'products' | 'users' | 'ai'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -48,6 +49,10 @@ function cadenceStatusLabel(status: string) {
 
 function taskStatusLabel(status: string) {
   return ({ OPEN: 'Na fila', ASSIGNED: 'Em atendimento', COMPLETED: 'Concluída' } as Record<string, string>)[status] ?? status
+}
+
+function userRoleLabel(role: ManagedUser['role']) {
+  return ({ ADMIN: 'Administrador', SALES_MANAGER: 'Gerente comercial', SALES_AGENT: 'Vendedor' } as Record<ManagedUser['role'], string>)[role]
 }
 
 function isSameLocalDay(value: string, reference: Date) {
@@ -147,6 +152,13 @@ export default function App() {
   const [playbookSaving, setPlaybookSaving] = useState(false)
   const [editingPlaybookId, setEditingPlaybookId] = useState<string>()
   const [playbookForm, setPlaybookForm] = useState({name:'', description:'', categories:'', active:true, defaultPlaybook:false})
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([])
+  const [usersLoading, setUsersLoading] = useState(false)
+  const [usersError, setUsersError] = useState('')
+  const [userFormOpen, setUserFormOpen] = useState(false)
+  const [editingUserId, setEditingUserId] = useState<string>()
+  const [userSaving, setUserSaving] = useState(false)
+  const [userForm, setUserForm] = useState({firstName:'', lastName:'', email:'', temporaryPassword:'', role:'SALES_AGENT', enabled:true})
 
   const loadLead = async (id: string, openConversation = true) => {
     setSelectedId(id)
@@ -362,6 +374,29 @@ export default function App() {
 
   useEffect(() => { if (authenticated && view === 'ai' && isAdministrator()) void loadAi() }, [authenticated, view])
 
+  const loadUsers = async () => {
+    setUsersLoading(true); setUsersError('')
+    try { setManagedUsers(await userManagementApi.users()) }
+    catch (error) { setUsersError(errorMessage(error, 'Não foi possível carregar os usuários')) }
+    finally { setUsersLoading(false) }
+  }
+  useEffect(() => { if (authenticated && view === 'users' && isAdministrator()) void loadUsers() }, [authenticated, view])
+  const openUserForm = (user?: ManagedUser) => {
+    setEditingUserId(user?.id)
+    setUserForm(user ? {firstName:user.firstName, lastName:user.lastName, email:user.email, temporaryPassword:'', role:user.role, enabled:user.enabled} : {firstName:'', lastName:'', email:'', temporaryPassword:'', role:'SALES_AGENT', enabled:true})
+    setUserFormOpen(true)
+  }
+  const saveUser = async () => {
+    setUserSaving(true); setUsersError('')
+    try {
+      const updated = editingUserId
+        ? await userManagementApi.update(editingUserId, {firstName:userForm.firstName, lastName:userForm.lastName, email:userForm.email, role:userForm.role, enabled:userForm.enabled})
+        : await userManagementApi.create({firstName:userForm.firstName, lastName:userForm.lastName, email:userForm.email, temporaryPassword:userForm.temporaryPassword, role:userForm.role})
+      setUserFormOpen(false); await loadUsers(); setNotice({message: editingUserId ? `${updated.firstName} foi atualizado.` : `${updated.firstName} foi criado e deverá trocar a senha no primeiro acesso.`, type:'success'})
+    } catch (error) { setUsersError(errorMessage(error, 'Não foi possível salvar o usuário')) }
+    finally { setUserSaving(false) }
+  }
+
   const saveAi = async () => {
     if (!aiSettings) return
     setAiSaving(true); setAiError('')
@@ -533,6 +568,7 @@ export default function App() {
         <button className={`nav-item ${view === 'tasks' ? 'active' : ''}`} title="Fila de tarefas" onClick={() => setView('tasks')}><span className="nav-icon">✓</span><span className="nav-label">Tarefas</span>{myTasks.length > 0 && <span className="nav-count">{myTasks.length}</span>}</button>
         <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>
         <button className={`nav-item ${view === 'products' ? 'active' : ''}`} title="Produtos e estoque" onClick={() => setView('products')}><span className="nav-icon">▣</span><span className="nav-label">Produtos</span></button>
+        {isAdministrator() && <button className={`nav-item ${view === 'users' ? 'active' : ''}`} title="Usuários" onClick={() => setView('users')}><span className="nav-icon">♙</span><span className="nav-label">Usuários</span></button>}
         {isAdministrator() && <button className={`nav-item ${view === 'ai' ? 'active' : ''}`} title="Configuração de IA" onClick={() => setView('ai')}><span className="nav-icon">✦</span><span className="nav-label">IA</span></button>}
       </nav>
       <div className="sidebar-footer"><span className="status-dot" /><span className="sidebar-footer-label">Integração de leads ativa</span></div>
@@ -540,7 +576,7 @@ export default function App() {
 
     <main className="dashboard">
       <header className="topbar">
-        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'dashboard' ? 'Visão da operação' : view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'dashboard' ? 'Priorize os próximos passos e acompanhe a saúde comercial do time.' : view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
+        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'dashboard' ? 'Visão da operação' : view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'users' ? 'Usuários e acessos' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'dashboard' ? 'Priorize os próximos passos e acompanhe a saúde comercial do time.' : view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'users' ? 'Crie contas, defina responsabilidades e mantenha o acesso do time sob controle.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
         <div className="topbar-actions">{view === 'leads' && <button className="ai-save" onClick={() => setLeadFormOpen(true)}>Novo lead</button>}<button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
@@ -649,6 +685,15 @@ export default function App() {
         {productsLoading && <div className="report-state">Carregando produtos...</div>}
         {!productsLoading && productsError && <div className="report-state report-error"><p>{productsError}</p><button className="retry" onClick={() => void loadProducts()}>Tentar novamente</button></div>}
         {!productsLoading && !productsError && <section className="report-panel products-table"><div className="products-table-head"><span>Produto</span><span>Estoque disponível</span><span>Mínimo</span><span>Preço</span><span /></div>{products.length === 0 ? <p className="report-empty">Ainda não há produtos cadastrados para esta empresa.</p> : products.map((product) => <article key={product.id} className={product.lowStock ? 'low-stock' : ''}><div className="product-identity">{productImageUrls[product.id] ? <img className="product-thumbnail" src={productImageUrls[product.id]} alt="" /> : <span className="product-thumbnail product-thumbnail-empty" aria-hidden="true">▣</span>}<div><b>{product.title}</b><small>{product.sku} · {product.category}</small></div></div><strong>{product.availableQuantity}</strong><span>{product.reorderPoint}</span><span>{formatCurrency(product.price)}</span><button className="product-delete" onClick={() => void archiveProduct(product)}>Excluir</button></article>)}</section>}
+      </section>}
+
+      {isAdministrator() && view === 'users' && <section className="users-view" aria-busy={usersLoading}>
+        <section className="users-intro"><div><p className="section-kicker">Acesso ao AnySale</p><h2>Quem pode operar a sua equipe</h2><p>As permissões controlam o que cada pessoa pode ver e fazer no Console. A conta é criada no Keycloak e a senha temporária deve ser alterada no primeiro acesso.</p></div><button className="ai-save" onClick={() => openUserForm()}><span>＋</span> Novo usuário</button></section>
+        {userFormOpen && <section className="report-panel user-form"><div className="report-panel-heading"><div><p className="section-kicker">{editingUserId ? 'Atualizar acesso' : 'Novo acesso'}</p><h2>{editingUserId ? 'Editar usuário' : 'Convidar para a operação'}</h2></div><button className="secondary" onClick={() => setUserFormOpen(false)}>Fechar</button></div><div className="form-fields"><label>Nome<input value={userForm.firstName} onChange={(event) => setUserForm({...userForm, firstName:event.target.value})} placeholder="Ex.: Camila" /></label><label>Sobrenome<input value={userForm.lastName} onChange={(event) => setUserForm({...userForm, lastName:event.target.value})} placeholder="Ex.: Rocha" /></label><label>Email corporativo<input type="email" value={userForm.email} onChange={(event) => setUserForm({...userForm, email:event.target.value})} placeholder="nome@empresa.com" /></label><label>Responsabilidade<select value={userForm.role} onChange={(event) => setUserForm({...userForm, role:event.target.value as ManagedUser['role']})}><option value="SALES_AGENT">Vendedor — atende leads e tarefas</option><option value="SALES_MANAGER">Gerente comercial — acompanha a operação</option><option value="ADMIN">Administrador — gerencia configurações e acessos</option></select></label>{!editingUserId && <label className="full-width">Senha temporária<small className="field-help">Informe ao usuário por um canal seguro. Ele será solicitado a trocá-la no primeiro login.</small><input type="password" autoComplete="new-password" value={userForm.temporaryPassword} onChange={(event) => setUserForm({...userForm, temporaryPassword:event.target.value})} placeholder="Mínimo de 8 caracteres" /></label>}{editingUserId && <label className="user-enabled full-width"><input type="checkbox" checked={userForm.enabled} onChange={(event) => setUserForm({...userForm, enabled:event.target.checked})} /><span><b>Usuário ativo</b><small>Desative para bloquear o acesso sem apagar o histórico comercial.</small></span></label>}</div><div className="actions"><button className="secondary" onClick={() => setUserFormOpen(false)}>Cancelar</button><button className="ai-save" disabled={userSaving || !userForm.firstName.trim() || !userForm.lastName.trim() || !userForm.email.trim() || (!editingUserId && userForm.temporaryPassword.length < 8)} onClick={() => void saveUser()}>{userSaving ? 'Salvando...' : editingUserId ? 'Salvar alterações' : 'Criar usuário'}</button></div></section>}
+        {notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
+        {usersLoading && <div className="report-state">Carregando usuários e permissões...</div>}
+        {!usersLoading && usersError && <div className="report-state report-error"><p>{usersError}</p><button className="retry" onClick={() => void loadUsers()}>Tentar novamente</button></div>}
+        {!usersLoading && !usersError && <section className="report-panel users-table"><div className="users-table-heading"><div><p className="section-kicker">Equipe</p><h2>{managedUsers.length} {managedUsers.length === 1 ? 'usuário com acesso' : 'usuários com acesso'}</h2></div><button className="secondary" onClick={() => void loadUsers()}>↻ Atualizar</button></div>{managedUsers.length === 0 ? <div className="users-empty"><b>Nenhuma conta encontrada</b><p>Crie o primeiro usuário para montar o time comercial.</p></div> : <div className="users-list">{managedUsers.map((user) => <article key={user.id} className={!user.enabled ? 'is-disabled' : ''}><div className="user-avatar">{`${user.firstName[0] ?? ''}${user.lastName[0] ?? ''}`.toUpperCase() || '?'}</div><div className="user-identity"><b>{user.firstName} {user.lastName}</b><small>{user.email}</small></div><span className={`user-role user-role-${user.role.toLowerCase()}`}>{userRoleLabel(user.role)}</span><span className={`user-status ${user.enabled ? 'active' : ''}`}>{user.enabled ? 'Ativo' : 'Desativado'}</span><button className="secondary" onClick={() => openUserForm(user)}>Editar</button></article>)}</div>}</section>}
       </section>}
 
       {isAdministrator() && view === 'dashboard' && <section className="reports-view dashboard-reporting" aria-busy={reportLoading}>
