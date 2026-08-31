@@ -100,7 +100,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [colorTheme, setColorTheme] = useState<'light' | 'dark'>('light')
   const [savingTheme, setSavingTheme] = useState(false)
-  const [view, setView] = useState<View>('dashboard')
+  const [view, setView] = useState<View>(() => isAdministrator() ? 'dashboard' : 'leads')
   const [leadFormOpen, setLeadFormOpen] = useState(false)
   const [leadCreating, setLeadCreating] = useState(false)
   const [leadForm, setLeadForm] = useState({name:'', email:'', phone:'', source:'CONSOLE', desiredCategory:'', desiredTags:''})
@@ -329,7 +329,8 @@ export default function App() {
     }
   }
 
-  useEffect(() => { if (authenticated && view === 'dashboard') void loadReport() }, [authenticated, view])
+  useEffect(() => { if (authenticated && isAdministrator() && view === 'dashboard') void loadReport() }, [authenticated, view])
+  useEffect(() => { if (authenticated && !isAdministrator() && view === 'dashboard') setView('leads') }, [authenticated, view])
   useEffect(() => { if (authenticated && view === 'cadences') void loadCadences() }, [authenticated, view])
   useEffect(() => { if (authenticated && view === 'tasks') void loadTasks() }, [authenticated, view])
   useEffect(() => { if (authenticated) void loadTasks() }, [authenticated])
@@ -527,7 +528,7 @@ export default function App() {
       <button className="sidebar-toggle" onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}><span>{sidebarCollapsed ? '›' : '‹'}</span><b>{sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'}</b></button>
       <div className="workspace-name"><span className="workspace-dot" /><span className="workspace-label">Operação comercial</span></div>
       <nav aria-label="Navegação principal">
-        <button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} title="Dashboard" onClick={() => setView('dashboard')}><span className="nav-icon">▦</span><span className="nav-label">Dashboard</span></button>
+        {isAdministrator() && <button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} title="Dashboard" onClick={() => setView('dashboard')}><span className="nav-icon">▦</span><span className="nav-label">Dashboard</span></button>}
         <button className={`nav-item ${view === 'leads' ? 'active' : ''}`} title="Leads" onClick={() => setView('leads')}><span className="nav-icon">◫</span><span className="nav-label">Leads</span><span className="nav-count">{leads.length}</span></button>
         <button className={`nav-item ${view === 'tasks' ? 'active' : ''}`} title="Fila de tarefas" onClick={() => setView('tasks')}><span className="nav-icon">✓</span><span className="nav-label">Tarefas</span>{myTasks.length > 0 && <span className="nav-count">{myTasks.length}</span>}</button>
         <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>
@@ -546,7 +547,7 @@ export default function App() {
       {view === 'leads' && notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
 
       {(view === 'leads' || view === 'dashboard') && <>{view === 'leads' && leadFormOpen && <section className="report-panel lead-create-form"><div className="report-panel-heading"><div><p className="section-kicker">Novo contato</p><h2>Criar lead</h2></div></div><div className="form-fields"><label>Nome<input value={leadForm.name} onChange={event=>setLeadForm({...leadForm,name:event.target.value})} /></label><label>Telefone<input value={leadForm.phone} onChange={event=>setLeadForm({...leadForm,phone:event.target.value})} /></label><label>Email<input value={leadForm.email} onChange={event=>setLeadForm({...leadForm,email:event.target.value})} /></label><label>Categoria<input value={leadForm.desiredCategory} onChange={event=>setLeadForm({...leadForm,desiredCategory:event.target.value})} placeholder="Ex.: Varejo" /></label><label className="full-width">Tags<input value={leadForm.desiredTags} onChange={event=>setLeadForm({...leadForm,desiredTags:event.target.value})} placeholder="Separadas por vírgula" /></label></div><div className="actions"><button className="secondary" onClick={()=>setLeadFormOpen(false)}>Cancelar</button><button className="ai-save" disabled={leadCreating||!leadForm.name.trim()} onClick={()=>void createLead()}>{leadCreating?'Criando...':'Criar lead'}</button></div></section>}
-      {view === 'dashboard' && <section className="operational-dashboard" aria-label="Prioridades da operação">
+      {isAdministrator() && view === 'dashboard' && <section className="operational-dashboard" aria-label="Prioridades da operação">
         <div className="operational-dashboard-heading"><div><p className="section-kicker">Prioridades de hoje</p><h2>O que precisa da atenção do time</h2><p>Use a fila para assumir e concluir os próximos passos vinculados aos leads.</p></div><button className="ai-save" onClick={() => setView('tasks')}>Abrir fila de tarefas</button></div>
         <div className="operational-priority-grid">
           <article className={`operational-priority ${overdueTasks.length ? 'is-critical' : ''}`}><span className="operational-priority-icon">!</span><div><b>{overdueTasks.length}</b><strong>Tarefas vencidas</strong><small>{overdueTasks.length ? 'Precisam de ação antes de novas demandas.' : 'Nenhuma pendência vencida.'}</small></div></article>
@@ -556,14 +557,14 @@ export default function App() {
         </div>
       </section>}
 
-      {view === 'dashboard' && <section className="metrics" aria-label="Resumo da operação">
+      {isAdministrator() && view === 'dashboard' && <section className="metrics" aria-label="Resumo da operação">
         <article className="metric-card"><div className="metric-icon blue">◫</div><div><p>Leads em acompanhamento</p><strong>{leads.length}</strong><span>Base carregada</span></div></article>
         <article className="metric-card"><div className="metric-icon violet">↗</div><div><p>Potencial em negociação</p><strong>{formatCurrency(estimatedPipeline)}</strong><span>Oportunidades abertas</span></div></article>
         <article className="metric-card"><div className="metric-icon mint">✓</div><div><p>Receita realizada</p><strong>{formatCurrency(closedRevenue)}</strong><span>{wonLeads} negócios ganhos</span></div></article>
         <article className="metric-card"><div className="metric-icon amber">◌</div><div><p>Conversão atual</p><strong>{conversion}%</strong><span>Sobre a base carregada</span></div></article>
       </section>}
 
-      {view === 'dashboard' && <section className="dashboard-insights" aria-label="Visão de acompanhamento">
+      {isAdministrator() && view === 'dashboard' && <section className="dashboard-insights" aria-label="Visão de acompanhamento">
         <article className="dashboard-insight"><div><p className="section-kicker">Cadência e tarefas</p><h2>Próximos contatos sob controle</h2></div><p><b>{openTasks.length}</b> tarefas abertas mantêm os próximos passos visíveis para o time.</p><button className="secondary" onClick={() => setView('cadences')}>Configurar cadências</button></article>
         <article className="dashboard-insight"><div><p className="section-kicker">Saúde do funil</p><h2>Oportunidades em movimento</h2></div><p><b>{activeLeads.length}</b> leads ainda estão em negociação, representando <b>{formatCurrency(estimatedPipeline)}</b> de potencial.</p><button className="secondary" onClick={() => void loadReport()}>Atualizar indicadores</button></article>
       </section>}
@@ -650,7 +651,7 @@ export default function App() {
         {!productsLoading && !productsError && <section className="report-panel products-table"><div className="products-table-head"><span>Produto</span><span>Estoque disponível</span><span>Mínimo</span><span>Preço</span><span /></div>{products.length === 0 ? <p className="report-empty">Ainda não há produtos cadastrados para esta empresa.</p> : products.map((product) => <article key={product.id} className={product.lowStock ? 'low-stock' : ''}><div className="product-identity">{productImageUrls[product.id] ? <img className="product-thumbnail" src={productImageUrls[product.id]} alt="" /> : <span className="product-thumbnail product-thumbnail-empty" aria-hidden="true">▣</span>}<div><b>{product.title}</b><small>{product.sku} · {product.category}</small></div></div><strong>{product.availableQuantity}</strong><span>{product.reorderPoint}</span><span>{formatCurrency(product.price)}</span><button className="product-delete" onClick={() => void archiveProduct(product)}>Excluir</button></article>)}</section>}
       </section>}
 
-      {view === 'dashboard' && <section className="reports-view dashboard-reporting" aria-busy={reportLoading}>
+      {isAdministrator() && view === 'dashboard' && <section className="reports-view dashboard-reporting" aria-busy={reportLoading}>
         {reportLoading && <div className="report-state">Carregando indicadores comerciais...</div>}
         {!reportLoading && reportError && <div className="report-state report-error"><p>{reportError}</p><button className="retry" onClick={() => void loadReport()}>Tentar novamente</button></div>}
         {!reportLoading && !reportError && funnel && <>
