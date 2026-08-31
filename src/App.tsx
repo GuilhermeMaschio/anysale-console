@@ -7,6 +7,7 @@ import './TaskQueue.css'
 import './Playbook.css'
 import './ButtonStyles.css'
 import './LeadWorkspace.css'
+import './OperationalDashboard.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {
@@ -18,7 +19,7 @@ const stageLabels: Record<string, string> = {
   LOST: 'Fechado — perdido',
 }
 type Notice = { message: string; type: 'error' | 'success' }
-type View = 'leads' | 'tasks' | 'cadences' | 'products' | 'reports' | 'ai'
+type View = 'dashboard' | 'leads' | 'tasks' | 'cadences' | 'products' | 'ai'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -47,6 +48,11 @@ function cadenceStatusLabel(status: string) {
 
 function taskStatusLabel(status: string) {
   return ({ OPEN: 'Na fila', ASSIGNED: 'Em atendimento', COMPLETED: 'Concluída' } as Record<string, string>)[status] ?? status
+}
+
+function isSameLocalDay(value: string, reference: Date) {
+  const date = new Date(value)
+  return !Number.isNaN(date.getTime()) && date.getFullYear() === reference.getFullYear() && date.getMonth() === reference.getMonth() && date.getDate() === reference.getDate()
 }
 
 function reportErrorMessage(error: unknown) {
@@ -94,7 +100,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [colorTheme, setColorTheme] = useState<'light' | 'dark'>('light')
   const [savingTheme, setSavingTheme] = useState(false)
-  const [view, setView] = useState<View>('leads')
+  const [view, setView] = useState<View>(() => isAdministrator() ? 'dashboard' : 'leads')
   const [leadFormOpen, setLeadFormOpen] = useState(false)
   const [leadCreating, setLeadCreating] = useState(false)
   const [leadForm, setLeadForm] = useState({name:'', email:'', phone:'', source:'CONSOLE', desiredCategory:'', desiredTags:''})
@@ -323,9 +329,11 @@ export default function App() {
     }
   }
 
-  useEffect(() => { if (authenticated && view === 'reports') void loadReport() }, [authenticated, view])
+  useEffect(() => { if (authenticated && isAdministrator() && view === 'dashboard') void loadReport() }, [authenticated, view])
+  useEffect(() => { if (authenticated && !isAdministrator() && view === 'dashboard') setView('leads') }, [authenticated, view])
   useEffect(() => { if (authenticated && view === 'cadences') void loadCadences() }, [authenticated, view])
   useEffect(() => { if (authenticated && view === 'tasks') void loadTasks() }, [authenticated, view])
+  useEffect(() => { if (authenticated) void loadTasks() }, [authenticated])
   const loadProducts = async () => { setProductsLoading(true); setProductsError(''); try { setProducts(await catalogApi.products()) } catch (error) { setProductsError(errorMessage(error, 'Não foi possível carregar os produtos')) } finally { setProductsLoading(false) } }
   useEffect(() => { if (authenticated && view === 'products') void loadProducts() }, [authenticated, view])
   useEffect(() => {
@@ -504,6 +512,12 @@ export default function App() {
   const closedRevenue = leads.reduce((total, item) => total + (item.actualValue ?? 0), 0)
   const wonLeads = leads.filter((item) => item.stage === 'WON').length
   const conversion = leads.length ? Math.round((wonLeads / leads.length) * 100) : 0
+  const now = new Date()
+  const openTasks = [...availableTasks, ...myTasks].filter((task) => task.status !== 'COMPLETED')
+  const overdueTasks = openTasks.filter((task) => new Date(task.dueAt).getTime() < now.getTime())
+  const todayTasks = openTasks.filter((task) => isSameLocalDay(task.dueAt, now))
+  const replyTasks = openTasks.filter((task) => task.taskType === 'WHATSAPP_REPLY')
+  const activeLeads = leads.filter((item) => !['WON', 'LOST'].includes(item.stage))
 
   const operatorName = currentUserName()
   const operatorInitials = operatorName.split(' ').filter(Boolean).slice(0, 2).map((name) => name[0]).join('').toUpperCase() || 'OP'
@@ -514,11 +528,11 @@ export default function App() {
       <button className="sidebar-toggle" onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}><span>{sidebarCollapsed ? '›' : '‹'}</span><b>{sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'}</b></button>
       <div className="workspace-name"><span className="workspace-dot" /><span className="workspace-label">Operação comercial</span></div>
       <nav aria-label="Navegação principal">
+        {isAdministrator() && <button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} title="Dashboard" onClick={() => setView('dashboard')}><span className="nav-icon">▦</span><span className="nav-label">Dashboard</span></button>}
         <button className={`nav-item ${view === 'leads' ? 'active' : ''}`} title="Leads" onClick={() => setView('leads')}><span className="nav-icon">◫</span><span className="nav-label">Leads</span><span className="nav-count">{leads.length}</span></button>
         <button className={`nav-item ${view === 'tasks' ? 'active' : ''}`} title="Fila de tarefas" onClick={() => setView('tasks')}><span className="nav-icon">✓</span><span className="nav-label">Tarefas</span>{myTasks.length > 0 && <span className="nav-count">{myTasks.length}</span>}</button>
         <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>
         <button className={`nav-item ${view === 'products' ? 'active' : ''}`} title="Produtos e estoque" onClick={() => setView('products')}><span className="nav-icon">▣</span><span className="nav-label">Produtos</span></button>
-        <button className={`nav-item ${view === 'reports' ? 'active' : ''}`} title="Relatórios" onClick={() => setView('reports')}><span className="nav-icon">▥</span><span className="nav-label">Relatórios</span></button>
         {isAdministrator() && <button className={`nav-item ${view === 'ai' ? 'active' : ''}`} title="Configuração de IA" onClick={() => setView('ai')}><span className="nav-icon">✦</span><span className="nav-label">IA</span></button>}
       </nav>
       <div className="sidebar-footer"><span className="status-dot" /><span className="sidebar-footer-label">Integração de leads ativa</span></div>
@@ -526,21 +540,36 @@ export default function App() {
 
     <main className="dashboard">
       <header className="topbar">
-        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
+        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'dashboard' ? 'Visão da operação' : view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'dashboard' ? 'Priorize os próximos passos e acompanhe a saúde comercial do time.' : view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
         <div className="topbar-actions">{view === 'leads' && <button className="ai-save" onClick={() => setLeadFormOpen(true)}>Novo lead</button>}<button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
       {view === 'leads' && notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
 
-      {view === 'leads' && <>{leadFormOpen && <section className="report-panel lead-create-form"><div className="report-panel-heading"><div><p className="section-kicker">Novo contato</p><h2>Criar lead</h2></div></div><div className="form-fields"><label>Nome<input value={leadForm.name} onChange={event=>setLeadForm({...leadForm,name:event.target.value})} /></label><label>Telefone<input value={leadForm.phone} onChange={event=>setLeadForm({...leadForm,phone:event.target.value})} /></label><label>Email<input value={leadForm.email} onChange={event=>setLeadForm({...leadForm,email:event.target.value})} /></label><label>Categoria<input value={leadForm.desiredCategory} onChange={event=>setLeadForm({...leadForm,desiredCategory:event.target.value})} placeholder="Ex.: Varejo" /></label><label className="full-width">Tags<input value={leadForm.desiredTags} onChange={event=>setLeadForm({...leadForm,desiredTags:event.target.value})} placeholder="Separadas por vírgula" /></label></div><div className="actions"><button className="secondary" onClick={()=>setLeadFormOpen(false)}>Cancelar</button><button className="ai-save" disabled={leadCreating||!leadForm.name.trim()} onClick={()=>void createLead()}>{leadCreating?'Criando...':'Criar lead'}</button></div></section>}
-      <section className="metrics" aria-label="Resumo da operação">
+      {(view === 'leads' || view === 'dashboard') && <>{view === 'leads' && leadFormOpen && <section className="report-panel lead-create-form"><div className="report-panel-heading"><div><p className="section-kicker">Novo contato</p><h2>Criar lead</h2></div></div><div className="form-fields"><label>Nome<input value={leadForm.name} onChange={event=>setLeadForm({...leadForm,name:event.target.value})} /></label><label>Telefone<input value={leadForm.phone} onChange={event=>setLeadForm({...leadForm,phone:event.target.value})} /></label><label>Email<input value={leadForm.email} onChange={event=>setLeadForm({...leadForm,email:event.target.value})} /></label><label>Categoria<input value={leadForm.desiredCategory} onChange={event=>setLeadForm({...leadForm,desiredCategory:event.target.value})} placeholder="Ex.: Varejo" /></label><label className="full-width">Tags<input value={leadForm.desiredTags} onChange={event=>setLeadForm({...leadForm,desiredTags:event.target.value})} placeholder="Separadas por vírgula" /></label></div><div className="actions"><button className="secondary" onClick={()=>setLeadFormOpen(false)}>Cancelar</button><button className="ai-save" disabled={leadCreating||!leadForm.name.trim()} onClick={()=>void createLead()}>{leadCreating?'Criando...':'Criar lead'}</button></div></section>}
+      {isAdministrator() && view === 'dashboard' && <section className="operational-dashboard" aria-label="Prioridades da operação">
+        <div className="operational-dashboard-heading"><div><p className="section-kicker">Prioridades de hoje</p><h2>O que precisa da atenção do time</h2><p>Use a fila para assumir e concluir os próximos passos vinculados aos leads.</p></div><button className="ai-save" onClick={() => setView('tasks')}>Abrir fila de tarefas</button></div>
+        <div className="operational-priority-grid">
+          <article className={`operational-priority ${overdueTasks.length ? 'is-critical' : ''}`}><span className="operational-priority-icon">!</span><div><b>{overdueTasks.length}</b><strong>Tarefas vencidas</strong><small>{overdueTasks.length ? 'Precisam de ação antes de novas demandas.' : 'Nenhuma pendência vencida.'}</small></div></article>
+          <article className="operational-priority"><span className="operational-priority-icon">◷</span><div><b>{todayTasks.length}</b><strong>Para hoje</strong><small>Contatos e retornos previstos para esta data.</small></div></article>
+          <article className="operational-priority"><span className="operational-priority-icon">↗</span><div><b>{availableTasks.length}</b><strong>Na fila compartilhada</strong><small>Tarefas disponíveis para qualquer pessoa do time assumir.</small></div></article>
+          <article className={`operational-priority ${replyTasks.length ? 'is-attention' : ''}`}><span className="operational-priority-icon">◌</span><div><b>{replyTasks.length}</b><strong>Respostas aguardando</strong><small>Clientes que responderam e precisam de decisão comercial.</small></div></article>
+        </div>
+      </section>}
+
+      {isAdministrator() && view === 'dashboard' && <section className="metrics" aria-label="Resumo da operação">
         <article className="metric-card"><div className="metric-icon blue">◫</div><div><p>Leads em acompanhamento</p><strong>{leads.length}</strong><span>Base carregada</span></div></article>
         <article className="metric-card"><div className="metric-icon violet">↗</div><div><p>Potencial em negociação</p><strong>{formatCurrency(estimatedPipeline)}</strong><span>Oportunidades abertas</span></div></article>
         <article className="metric-card"><div className="metric-icon mint">✓</div><div><p>Receita realizada</p><strong>{formatCurrency(closedRevenue)}</strong><span>{wonLeads} negócios ganhos</span></div></article>
         <article className="metric-card"><div className="metric-icon amber">◌</div><div><p>Conversão atual</p><strong>{conversion}%</strong><span>Sobre a base carregada</span></div></article>
-      </section>
+      </section>}
 
-      <div className="workspace-grid">
+      {isAdministrator() && view === 'dashboard' && <section className="dashboard-insights" aria-label="Visão de acompanhamento">
+        <article className="dashboard-insight"><div><p className="section-kicker">Cadência e tarefas</p><h2>Próximos contatos sob controle</h2></div><p><b>{openTasks.length}</b> tarefas abertas mantêm os próximos passos visíveis para o time.</p><button className="secondary" onClick={() => setView('cadences')}>Configurar cadências</button></article>
+        <article className="dashboard-insight"><div><p className="section-kicker">Saúde do funil</p><h2>Oportunidades em movimento</h2></div><p><b>{activeLeads.length}</b> leads ainda estão em negociação, representando <b>{formatCurrency(estimatedPipeline)}</b> de potencial.</p><button className="secondary" onClick={() => void loadReport()}>Atualizar indicadores</button></article>
+      </section>}
+
+      {view === 'leads' && <div className="workspace-grid">
         <section className="panel kanban-panel" aria-busy={listLoading}>
           <div className="panel-heading"><div><p className="section-kicker">Carteira</p><h2>Leads por etapa</h2></div><div className="kanban-heading-meta"><span className="pill-count">{listLoading ? 'Carregando' : `${leads.length} no total`}</span><span>Arraste um lead para atualizar a etapa</span></div></div>
           <div className="kanban-board">
@@ -587,7 +616,7 @@ export default function App() {
           </>}
         </section>
         {conversationOpen && <button className="conversation-scrim" onClick={() => setConversationOpen(false)} aria-label="Fechar painel de atendimento" />}
-      </div>
+      </div>}
       </>}
 
       {view === 'tasks' && <section className="tasks-view" aria-busy={tasksLoading}>
@@ -622,11 +651,11 @@ export default function App() {
         {!productsLoading && !productsError && <section className="report-panel products-table"><div className="products-table-head"><span>Produto</span><span>Estoque disponível</span><span>Mínimo</span><span>Preço</span><span /></div>{products.length === 0 ? <p className="report-empty">Ainda não há produtos cadastrados para esta empresa.</p> : products.map((product) => <article key={product.id} className={product.lowStock ? 'low-stock' : ''}><div className="product-identity">{productImageUrls[product.id] ? <img className="product-thumbnail" src={productImageUrls[product.id]} alt="" /> : <span className="product-thumbnail product-thumbnail-empty" aria-hidden="true">▣</span>}<div><b>{product.title}</b><small>{product.sku} · {product.category}</small></div></div><strong>{product.availableQuantity}</strong><span>{product.reorderPoint}</span><span>{formatCurrency(product.price)}</span><button className="product-delete" onClick={() => void archiveProduct(product)}>Excluir</button></article>)}</section>}
       </section>}
 
-      {view === 'reports' && <section className="reports-view" aria-busy={reportLoading}>
+      {isAdministrator() && view === 'dashboard' && <section className="reports-view dashboard-reporting" aria-busy={reportLoading}>
         {reportLoading && <div className="report-state">Carregando indicadores comerciais...</div>}
         {!reportLoading && reportError && <div className="report-state report-error"><p>{reportError}</p><button className="retry" onClick={() => void loadReport()}>Tentar novamente</button></div>}
         {!reportLoading && !reportError && funnel && <>
-          <div className="report-updated"><span>Dados reais do funil</span><time>Atualizado em {interactionDate(funnel.generatedAt)}</time><button onClick={() => void loadReport()} aria-label="Atualizar relatórios">↻</button></div>
+          <div className="report-updated"><span>Indicadores comerciais</span><time>Atualizado em {interactionDate(funnel.generatedAt)}</time><button className="secondary" onClick={() => void loadReport()}>↻ Atualizar</button></div>
           <section className="report-kpis" aria-label="Indicadores do funil">
             <article><p>Potencial em negociação</p><strong>{formatCurrency(funnel.estimatedPipelineValue)}</strong><span>{funnel.totalLeads} leads no funil</span></article>
             <article><p>Receita ganha</p><strong>{formatCurrency(funnel.wonRevenue)}</strong><span>{funnel.wonLeads} negócios fechados</span></article>
