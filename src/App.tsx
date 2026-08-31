@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, cadenceEnrollmentApi, catalogApi, leadCreationApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
-import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
+import keycloak, { canManageCadences, currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
 import './TaskQueue.css'
@@ -344,7 +344,8 @@ export default function App() {
 
   useEffect(() => { if (authenticated && isAdministrator() && view === 'dashboard') void loadReport() }, [authenticated, view])
   useEffect(() => { if (authenticated && !isAdministrator() && view === 'dashboard') setView('leads') }, [authenticated, view])
-  useEffect(() => { if (authenticated && view === 'cadences') void loadCadences() }, [authenticated, view])
+  useEffect(() => { if (authenticated && !canManageCadences() && view === 'cadences') setView('leads') }, [authenticated, view])
+  useEffect(() => { if (authenticated && canManageCadences() && view === 'cadences') void loadCadences() }, [authenticated, view])
   useEffect(() => { if (authenticated && view === 'tasks') void loadTasks() }, [authenticated, view])
   useEffect(() => { if (authenticated) void loadTasks() }, [authenticated])
   const loadProducts = async () => { setProductsLoading(true); setProductsError(''); try { setProducts(await catalogApi.products()) } catch (error) { setProductsError(errorMessage(error, 'Não foi possível carregar os produtos')) } finally { setProductsLoading(false) } }
@@ -577,7 +578,7 @@ export default function App() {
         {isAdministrator() && <button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} title="Dashboard" onClick={() => setView('dashboard')}><span className="nav-icon">▦</span><span className="nav-label">Dashboard</span></button>}
         <button className={`nav-item ${view === 'leads' ? 'active' : ''}`} title="Leads" onClick={() => setView('leads')}><span className="nav-icon">◫</span><span className="nav-label">Leads</span><span className="nav-count">{leads.length}</span></button>
         <button className={`nav-item ${view === 'tasks' ? 'active' : ''}`} title="Fila de tarefas" onClick={() => setView('tasks')}><span className="nav-icon">✓</span><span className="nav-label">Tarefas</span>{myTasks.length > 0 && <span className="nav-count">{myTasks.length}</span>}</button>
-        <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>
+        {canManageCadences() && <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>}
         <button className={`nav-item ${view === 'products' ? 'active' : ''}`} title="Produtos e estoque" onClick={() => setView('products')}><span className="nav-icon">▣</span><span className="nav-label">Produtos</span></button>
         {isAdministrator() && <button className={`nav-item ${view === 'users' ? 'active' : ''}`} title="Usuários" onClick={() => setView('users')}><span className="nav-icon">♙</span><span className="nav-label">Usuários</span></button>}
         {isAdministrator() && <button className={`nav-item ${view === 'ai' ? 'active' : ''}`} title="Configuração de IA" onClick={() => setView('ai')}><span className="nav-icon">✦</span><span className="nav-label">IA</span></button>}
@@ -674,7 +675,7 @@ export default function App() {
         </div>}
       </section>}
 
-      {view === 'cadences' && <section className="cadence-view" aria-busy={cadenceLoading}>
+      {canManageCadences() && view === 'cadences' && <section className="cadence-view" aria-busy={cadenceLoading}>
         {cadenceError && <div className="report-state report-error"><p>{cadenceError}</p><button className="retry" onClick={() => void loadCadences()}>Tentar novamente</button></div>}
         {!cadenceError && <section className="report-panel cadence-editor">
           <div className="report-panel-heading"><div><p className="section-kicker">Automação comercial</p><h2>Cadências de acompanhamento</h2><p className="cadence-heading-help">Defina quando a equipe deve retomar o contato. Cada etapa cria uma tarefa vinculada ao lead na fila compartilhada.</p></div><div className="cadence-header-actions"><button className="secondary" onClick={() => editPlaybook()}>Novo playbook</button><button className="secondary cadence-refresh" onClick={() => void loadCadences()} disabled={cadenceLoading}>↻ Atualizar</button></div></div><section className="cadence-guide" aria-label="Como funcionam as cadências"><div><b>1. Escolha o contexto</b><span>Um playbook pode atender uma categoria de produto ou servir como padrão.</span></div><div><b>2. Planeje os contatos</b><span>As etapas determinam o prazo e a ação que entram na fila do time.</span></div><div><b>3. Acompanhe o lead</b><span>Abra a tarefa para ver o lead e registrar a evolução da negociação.</span></div></section><label className="automatic-enrollment"><input type="checkbox" checked={automaticEnrollment} disabled={automaticEnrollmentSaving} onChange={(event) => void saveAutomaticEnrollment(event.target.checked)} /><span><b>Iniciar automaticamente para novos leads</b><small>Usa o playbook da categoria do lead; se não houver, usa o padrão.</small></span></label>
