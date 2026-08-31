@@ -158,6 +158,7 @@ export default function App() {
   const [userFormOpen, setUserFormOpen] = useState(false)
   const [editingUserId, setEditingUserId] = useState<string>()
   const [userSaving, setUserSaving] = useState(false)
+  const [userDeletingId, setUserDeletingId] = useState<string>()
   const [userForm, setUserForm] = useState({firstName:'', lastName:'', email:'', temporaryPassword:'', role:'SALES_AGENT', enabled:true})
 
   const loadLead = async (id: string, openConversation = true) => {
@@ -395,6 +396,16 @@ export default function App() {
       setUserFormOpen(false); await loadUsers(); setNotice({message: editingUserId ? `${updated.firstName} foi atualizado.` : `${updated.firstName} foi criado e deverá trocar a senha no primeiro acesso.`, type:'success'})
     } catch (error) { setUsersError(errorMessage(error, 'Não foi possível salvar o usuário')) }
     finally { setUserSaving(false) }
+  }
+  const deleteUser = async (user: ManagedUser) => {
+    if (!window.confirm(`Excluir ${user.firstName} ${user.lastName}? Esta ação remove o acesso ao AnySale de forma permanente.`)) return
+    setUserDeletingId(user.id); setUsersError('')
+    try {
+      await userManagementApi.remove(user.id)
+      await loadUsers()
+      setNotice({message: `${user.firstName} foi excluído do AnySale.`, type:'success'})
+    } catch (error) { setUsersError(errorMessage(error, 'Não foi possível excluir o usuário')) }
+    finally { setUserDeletingId(undefined) }
   }
 
   const saveAi = async () => {
@@ -693,7 +704,7 @@ export default function App() {
         {notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
         {usersLoading && <div className="report-state">Carregando usuários e permissões...</div>}
         {!usersLoading && usersError && <div className="report-state report-error"><p>{usersError}</p><button className="retry" onClick={() => void loadUsers()}>Tentar novamente</button></div>}
-        {!usersLoading && !usersError && <section className="report-panel users-table"><div className="users-table-heading"><div><p className="section-kicker">Equipe</p><h2>{managedUsers.length} {managedUsers.length === 1 ? 'usuário com acesso' : 'usuários com acesso'}</h2></div><button className="secondary" onClick={() => void loadUsers()}>↻ Atualizar</button></div>{managedUsers.length === 0 ? <div className="users-empty"><b>Nenhuma conta encontrada</b><p>Crie o primeiro usuário para montar o time comercial.</p></div> : <div className="users-list">{managedUsers.map((user) => <article key={user.id} className={!user.enabled ? 'is-disabled' : ''}><div className="user-avatar">{`${user.firstName[0] ?? ''}${user.lastName[0] ?? ''}`.toUpperCase() || '?'}</div><div className="user-identity"><b>{user.firstName} {user.lastName}</b><small>{user.email}</small></div><span className={`user-role user-role-${user.role.toLowerCase()}`}>{userRoleLabel(user.role)}</span><span className={`user-status ${user.enabled ? 'active' : ''}`}>{user.enabled ? 'Ativo' : 'Desativado'}</span><button className="secondary" onClick={() => openUserForm(user)}>Editar</button></article>)}</div>}</section>}
+        {!usersLoading && !usersError && <section className="report-panel users-table"><div className="users-table-heading"><div><p className="section-kicker">Equipe</p><h2>{managedUsers.length} {managedUsers.length === 1 ? 'usuário com acesso' : 'usuários com acesso'}</h2></div><button className="secondary" onClick={() => void loadUsers()}>↻ Atualizar</button></div>{managedUsers.length === 0 ? <div className="users-empty"><b>Nenhuma conta encontrada</b><p>Crie o primeiro usuário para montar o time comercial.</p></div> : <div className="users-list">{managedUsers.map((user) => <article key={user.id} className={!user.enabled ? 'is-disabled' : ''}><div className="user-avatar">{`${user.firstName[0] ?? ''}${user.lastName[0] ?? ''}`.toUpperCase() || '?'}</div><div className="user-identity"><b>{user.firstName} {user.lastName}</b><small>{user.email}</small></div><span className={`user-role user-role-${user.role.toLowerCase()}`}>{userRoleLabel(user.role)}</span><span className={`user-status ${user.enabled ? 'active' : ''}`}>{user.enabled ? 'Ativo' : 'Desativado'}</span><div className="user-actions"><button className="secondary" onClick={() => openUserForm(user)}>Editar</button><button className="product-delete" onClick={() => void deleteUser(user)} disabled={userDeletingId === user.id} aria-label={`Excluir ${user.firstName} ${user.lastName}`} title="Excluir usuário">Excluir</button></div></article>)}</div>}</section>}
       </section>}
 
       {isAdministrator() && view === 'dashboard' && <section className="reports-view dashboard-reporting" aria-busy={reportLoading}>
