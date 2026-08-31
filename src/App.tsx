@@ -7,6 +7,7 @@ import './TaskQueue.css'
 import './Playbook.css'
 import './ButtonStyles.css'
 import './LeadWorkspace.css'
+import './OperationalDashboard.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {
@@ -47,6 +48,11 @@ function cadenceStatusLabel(status: string) {
 
 function taskStatusLabel(status: string) {
   return ({ OPEN: 'Na fila', ASSIGNED: 'Em atendimento', COMPLETED: 'Concluída' } as Record<string, string>)[status] ?? status
+}
+
+function isSameLocalDay(value: string, reference: Date) {
+  const date = new Date(value)
+  return !Number.isNaN(date.getTime()) && date.getFullYear() === reference.getFullYear() && date.getMonth() === reference.getMonth() && date.getDate() === reference.getDate()
 }
 
 function reportErrorMessage(error: unknown) {
@@ -326,6 +332,7 @@ export default function App() {
   useEffect(() => { if (authenticated && view === 'reports') void loadReport() }, [authenticated, view])
   useEffect(() => { if (authenticated && view === 'cadences') void loadCadences() }, [authenticated, view])
   useEffect(() => { if (authenticated && view === 'tasks') void loadTasks() }, [authenticated, view])
+  useEffect(() => { if (authenticated) void loadTasks() }, [authenticated])
   const loadProducts = async () => { setProductsLoading(true); setProductsError(''); try { setProducts(await catalogApi.products()) } catch (error) { setProductsError(errorMessage(error, 'Não foi possível carregar os produtos')) } finally { setProductsLoading(false) } }
   useEffect(() => { if (authenticated && view === 'products') void loadProducts() }, [authenticated, view])
   useEffect(() => {
@@ -504,6 +511,12 @@ export default function App() {
   const closedRevenue = leads.reduce((total, item) => total + (item.actualValue ?? 0), 0)
   const wonLeads = leads.filter((item) => item.stage === 'WON').length
   const conversion = leads.length ? Math.round((wonLeads / leads.length) * 100) : 0
+  const now = new Date()
+  const openTasks = [...availableTasks, ...myTasks].filter((task) => task.status !== 'COMPLETED')
+  const overdueTasks = openTasks.filter((task) => new Date(task.dueAt).getTime() < now.getTime())
+  const todayTasks = openTasks.filter((task) => isSameLocalDay(task.dueAt, now))
+  const replyTasks = openTasks.filter((task) => task.taskType === 'WHATSAPP_REPLY')
+  const activeLeads = leads.filter((item) => !['WON', 'LOST'].includes(item.stage))
 
   const operatorName = currentUserName()
   const operatorInitials = operatorName.split(' ').filter(Boolean).slice(0, 2).map((name) => name[0]).join('').toUpperCase() || 'OP'
@@ -533,11 +546,26 @@ export default function App() {
       {view === 'leads' && notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
 
       {view === 'leads' && <>{leadFormOpen && <section className="report-panel lead-create-form"><div className="report-panel-heading"><div><p className="section-kicker">Novo contato</p><h2>Criar lead</h2></div></div><div className="form-fields"><label>Nome<input value={leadForm.name} onChange={event=>setLeadForm({...leadForm,name:event.target.value})} /></label><label>Telefone<input value={leadForm.phone} onChange={event=>setLeadForm({...leadForm,phone:event.target.value})} /></label><label>Email<input value={leadForm.email} onChange={event=>setLeadForm({...leadForm,email:event.target.value})} /></label><label>Categoria<input value={leadForm.desiredCategory} onChange={event=>setLeadForm({...leadForm,desiredCategory:event.target.value})} placeholder="Ex.: Varejo" /></label><label className="full-width">Tags<input value={leadForm.desiredTags} onChange={event=>setLeadForm({...leadForm,desiredTags:event.target.value})} placeholder="Separadas por vírgula" /></label></div><div className="actions"><button className="secondary" onClick={()=>setLeadFormOpen(false)}>Cancelar</button><button className="ai-save" disabled={leadCreating||!leadForm.name.trim()} onClick={()=>void createLead()}>{leadCreating?'Criando...':'Criar lead'}</button></div></section>}
+      <section className="operational-dashboard" aria-label="Prioridades da operação">
+        <div className="operational-dashboard-heading"><div><p className="section-kicker">Prioridades de hoje</p><h2>O que precisa da atenção do time</h2><p>Use a fila para assumir e concluir os próximos passos vinculados aos leads.</p></div><button className="ai-save" onClick={() => setView('tasks')}>Abrir fila de tarefas</button></div>
+        <div className="operational-priority-grid">
+          <article className={`operational-priority ${overdueTasks.length ? 'is-critical' : ''}`}><span className="operational-priority-icon">!</span><div><b>{overdueTasks.length}</b><strong>Tarefas vencidas</strong><small>{overdueTasks.length ? 'Precisam de ação antes de novas demandas.' : 'Nenhuma pendência vencida.'}</small></div></article>
+          <article className="operational-priority"><span className="operational-priority-icon">◷</span><div><b>{todayTasks.length}</b><strong>Para hoje</strong><small>Contatos e retornos previstos para esta data.</small></div></article>
+          <article className="operational-priority"><span className="operational-priority-icon">↗</span><div><b>{availableTasks.length}</b><strong>Na fila compartilhada</strong><small>Tarefas disponíveis para qualquer pessoa do time assumir.</small></div></article>
+          <article className={`operational-priority ${replyTasks.length ? 'is-attention' : ''}`}><span className="operational-priority-icon">◌</span><div><b>{replyTasks.length}</b><strong>Respostas aguardando</strong><small>Clientes que responderam e precisam de decisão comercial.</small></div></article>
+        </div>
+      </section>
+
       <section className="metrics" aria-label="Resumo da operação">
         <article className="metric-card"><div className="metric-icon blue">◫</div><div><p>Leads em acompanhamento</p><strong>{leads.length}</strong><span>Base carregada</span></div></article>
         <article className="metric-card"><div className="metric-icon violet">↗</div><div><p>Potencial em negociação</p><strong>{formatCurrency(estimatedPipeline)}</strong><span>Oportunidades abertas</span></div></article>
         <article className="metric-card"><div className="metric-icon mint">✓</div><div><p>Receita realizada</p><strong>{formatCurrency(closedRevenue)}</strong><span>{wonLeads} negócios ganhos</span></div></article>
         <article className="metric-card"><div className="metric-icon amber">◌</div><div><p>Conversão atual</p><strong>{conversion}%</strong><span>Sobre a base carregada</span></div></article>
+      </section>
+
+      <section className="dashboard-insights" aria-label="Visão de acompanhamento">
+        <article className="dashboard-insight"><div><p className="section-kicker">Cadência e tarefas</p><h2>Próximos contatos sob controle</h2></div><p><b>{openTasks.length}</b> tarefas abertas mantêm os próximos passos visíveis para o time.</p><button className="secondary" onClick={() => setView('cadences')}>Configurar cadências</button></article>
+        <article className="dashboard-insight"><div><p className="section-kicker">Saúde do funil</p><h2>Oportunidades em movimento</h2></div><p><b>{activeLeads.length}</b> leads ainda estão em negociação, representando <b>{formatCurrency(estimatedPipeline)}</b> de potencial.</p><button className="secondary" onClick={() => setView('reports')}>Ver relatórios</button></article>
       </section>
 
       <div className="workspace-grid">
