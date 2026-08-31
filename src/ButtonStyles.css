@@ -12,6 +12,9 @@
 button:focus-visible{outline:3px solid rgba(108,231,255,.5);outline-offset:3px}
 button:disabled{transform:none!important;box-shadow:none!important;cursor:not-allowed}
 
+/* Exclusões usam uma lixeira compacta; o texto continua disponível para leitores de tela. */
+.product-delete{position:relative;width:40px;min-width:40px;height:40px;padding:0!important;font-size:0!important;border-radius:10px}.product-delete::before{content:'';position:absolute;inset:0;background:center/18px 18px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c92f3c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18'/%3E%3Cpath d='M8 6V4h8v2'/%3E%3Cpath d='M19 6l-1 14H6L5 6'/%3E%3Cpath d='M10 11v5M14 11v5'/%3E%3C/svg%3E")}
+
 .theme-light .ai-save,.theme-light .actions button:not(.secondary),.theme-light .composer-footer button{box-shadow:0 9px 20px rgba(16,143,105,.2)}
 .theme-light .secondary,.theme-light .retry,.theme-light .theme-toggle,.theme-light .logout,.theme-light .details-toggle,.theme-light .ai-draft-action,.theme-light .product-delete{box-shadow:0 4px 12px rgba(29,59,100,.08)}
 .theme-light button:focus-visible{outline-color:rgba(39,117,232,.45)}
