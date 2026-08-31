@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, cadenceEnrollmentApi, catalogApi, leadCreationApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
+import { api, cadenceEnrollmentApi, catalogApi, leadCreationApi, leadRoadmapApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadCadenceRoadmap, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
 import keycloak, { canManageCadences, currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
@@ -9,6 +9,7 @@ import './ButtonStyles.css'
 import './LeadWorkspace.css'
 import './OperationalDashboard.css'
 import './UserManagement.css'
+import './SalesRoadmap.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {
@@ -20,7 +21,7 @@ const stageLabels: Record<string, string> = {
   LOST: 'Fechado — perdido',
 }
 type Notice = { message: string; type: 'error' | 'success' }
-type View = 'dashboard' | 'leads' | 'tasks' | 'cadences' | 'products' | 'users' | 'ai'
+type View = 'dashboard' | 'leads' | 'tasks' | 'roadmap' | 'cadences' | 'products' | 'users' | 'ai'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -141,6 +142,10 @@ export default function App() {
   const [automaticEnrollmentSaving, setAutomaticEnrollmentSaving] = useState(false)
   const [leadCadence, setLeadCadence] = useState<LeadCadence>()
   const [leadCadenceLoading, setLeadCadenceLoading] = useState(false)
+  const [roadmapLeadId, setRoadmapLeadId] = useState('')
+  const [leadRoadmap, setLeadRoadmap] = useState<LeadCadenceRoadmap>()
+  const [roadmapLoading, setRoadmapLoading] = useState(false)
+  const [roadmapError, setRoadmapError] = useState('')
   const [leadTasks, setLeadTasks] = useState<LeadTask[]>([])
   const [leadTasksLoading, setLeadTasksLoading] = useState(false)
   const [availableTasks, setAvailableTasks] = useState<LeadTask[]>([])
@@ -216,6 +221,14 @@ export default function App() {
     try { setLeadCadence(await api.leadCadence(leadId)) }
     catch { setLeadCadence(undefined) }
     finally { setLeadCadenceLoading(false) }
+  }
+
+  const loadLeadRoadmap = async (leadId: string) => {
+    if (!leadId) return
+    setRoadmapLoading(true); setRoadmapError('')
+    try { setLeadRoadmap(await leadRoadmapApi.get(leadId)) }
+    catch (error) { setLeadRoadmap(undefined); setRoadmapError(errorMessage(error, 'Ainda não há um roteiro ativo para este lead')) }
+    finally { setRoadmapLoading(false) }
   }
 
   const loadLeadTasks = async (leadId: string) => {
@@ -346,6 +359,13 @@ export default function App() {
   useEffect(() => { if (authenticated && !isAdministrator() && view === 'dashboard') setView('leads') }, [authenticated, view])
   useEffect(() => { if (authenticated && !canManageCadences() && view === 'cadences') setView('leads') }, [authenticated, view])
   useEffect(() => { if (authenticated && canManageCadences() && view === 'cadences') void loadCadences() }, [authenticated, view])
+  useEffect(() => {
+    if (!authenticated || canManageCadences() || view !== 'roadmap') return
+    const leadId = roadmapLeadId || leads.find((item) => !['WON', 'LOST'].includes(item.stage))?.id
+    if (!leadId) return
+    if (!roadmapLeadId) setRoadmapLeadId(leadId)
+    void loadLeadRoadmap(leadId)
+  }, [authenticated, view, roadmapLeadId, leads])
   useEffect(() => { if (authenticated && view === 'tasks') void loadTasks() }, [authenticated, view])
   useEffect(() => { if (authenticated) void loadTasks() }, [authenticated])
   const loadProducts = async () => { setProductsLoading(true); setProductsError(''); try { setProducts(await catalogApi.products()) } catch (error) { setProductsError(errorMessage(error, 'Não foi possível carregar os produtos')) } finally { setProductsLoading(false) } }
@@ -565,6 +585,7 @@ export default function App() {
   const todayTasks = openTasks.filter((task) => isSameLocalDay(task.dueAt, now))
   const replyTasks = openTasks.filter((task) => task.taskType === 'WHATSAPP_REPLY')
   const activeLeads = leads.filter((item) => !['WON', 'LOST'].includes(item.stage))
+  const roadmapLead = leads.find((item) => item.id === roadmapLeadId)
 
   const operatorName = currentUserName()
   const operatorInitials = operatorName.split(' ').filter(Boolean).slice(0, 2).map((name) => name[0]).join('').toUpperCase() || 'OP'
@@ -578,6 +599,7 @@ export default function App() {
         {isAdministrator() && <button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} title="Dashboard" onClick={() => setView('dashboard')}><span className="nav-icon">▦</span><span className="nav-label">Dashboard</span></button>}
         <button className={`nav-item ${view === 'leads' ? 'active' : ''}`} title="Leads" onClick={() => setView('leads')}><span className="nav-icon">◫</span><span className="nav-label">Leads</span><span className="nav-count">{leads.length}</span></button>
         <button className={`nav-item ${view === 'tasks' ? 'active' : ''}`} title="Fila de tarefas" onClick={() => setView('tasks')}><span className="nav-icon">✓</span><span className="nav-label">Tarefas</span>{myTasks.length > 0 && <span className="nav-count">{myTasks.length}</span>}</button>
+        {!canManageCadences() && <button className={`nav-item ${view === 'roadmap' ? 'active' : ''}`} title="Meu roteiro de vendas" onClick={() => setView('roadmap')}><span className="nav-icon">◌</span><span className="nav-label">Meu roteiro</span></button>}
         {canManageCadences() && <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>}
         <button className={`nav-item ${view === 'products' ? 'active' : ''}`} title="Produtos e estoque" onClick={() => setView('products')}><span className="nav-icon">▣</span><span className="nav-label">Produtos</span></button>
         {isAdministrator() && <button className={`nav-item ${view === 'users' ? 'active' : ''}`} title="Usuários" onClick={() => setView('users')}><span className="nav-icon">♙</span><span className="nav-label">Usuários</span></button>}
@@ -588,11 +610,21 @@ export default function App() {
 
     <main className="dashboard">
       <header className="topbar">
-        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'dashboard' ? 'Visão da operação' : view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'users' ? 'Usuários e acessos' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'dashboard' ? 'Priorize os próximos passos e acompanhe a saúde comercial do time.' : view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'users' ? 'Crie contas, defina responsabilidades e mantenha o acesso do time sob controle.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
+        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'dashboard' ? 'Visão da operação' : view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'roadmap' ? 'Meu roteiro de vendas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'users' ? 'Usuários e acessos' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'dashboard' ? 'Priorize os próximos passos e acompanhe a saúde comercial do time.' : view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'roadmap' ? 'Entenda o momento de cada negociação e concentre-se no próximo melhor passo.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'users' ? 'Crie contas, defina responsabilidades e mantenha o acesso do time sob controle.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
         <div className="topbar-actions">{view === 'leads' && <button className="ai-save" onClick={() => setLeadFormOpen(true)}>Novo lead</button>}<button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
       {view === 'leads' && notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
+
+      {!canManageCadences() && view === 'roadmap' && <section className="sales-roadmap" aria-busy={roadmapLoading}>
+        <header className="sales-roadmap-intro"><div><p className="section-kicker">Seu guia de atendimento</p><h2>Entenda a história de cada venda</h2><p>Escolha um lead para ver onde a negociação está, o objetivo do momento e os próximos contatos previstos.</p></div><span aria-hidden="true">◌</span></header>
+        {activeLeads.length === 0 ? <section className="report-panel sales-roadmap-empty"><b>Nenhuma negociação ativa no momento</b><p>Quando um lead entrar na sua carteira, o roteiro comercial aparecerá aqui.</p></section> : <>
+          <label className="sales-roadmap-picker">Lead que você está acompanhando<select value={roadmapLeadId} onChange={(event) => setRoadmapLeadId(event.target.value)}>{activeLeads.map((item) => <option key={item.id} value={item.id}>{item.name} — {stageLabel(item.stage)}</option>)}</select></label>
+          {roadmapLoading && <div className="report-state">Montando o roteiro comercial...</div>}
+          {!roadmapLoading && roadmapError && <section className="report-panel sales-roadmap-empty"><b>Este lead ainda não possui um roteiro ativo</b><p>Assim que a gestão comercial iniciar a cadência, os próximos passos aparecerão aqui.</p></section>}
+          {!roadmapLoading && leadRoadmap && <section className="report-panel roadmap-story"><header><div><p className="section-kicker">{leadRoadmap.cadence.playbookName}</p><h2>{roadmapLead?.name ?? 'Lead selecionado'}</h2><p>{leadRoadmap.cadence.status === 'PAUSED' ? 'O roteiro está pausado para a equipe avaliar a resposta do cliente.' : leadRoadmap.cadence.status === 'COMPLETED' ? 'Este roteiro foi concluído. Consulte as tarefas e a etapa do lead para definir o próximo movimento.' : 'Siga a sequência abaixo. Cada etapa mostra o objetivo do contato e prepara a próxima ação.'}</p></div><span className={`roadmap-status roadmap-status-${leadRoadmap.cadence.status.toLowerCase()}`}>{cadenceStatusLabel(leadRoadmap.cadence.status)}</span></header><ol className="roadmap-steps">{leadRoadmap.steps.map((step) => { const completed = leadRoadmap.cadence.status === 'COMPLETED' || step.position < leadRoadmap.cadence.nextPosition; const current = !completed && step.position === leadRoadmap.cadence.nextPosition && leadRoadmap.cadence.status === 'ACTIVE'; return <li className={completed ? 'completed' : current ? 'current' : 'upcoming'} key={step.id}><span className="roadmap-step-number">{completed ? '✓' : step.position}</span><div><p>{completed ? 'Etapa concluída' : current ? 'Você está aqui' : 'Próximo passo'}</p><h3>{step.title}</h3><small>{step.note || 'Siga esta etapa para manter a negociação avançando no ritmo certo.'}</small></div>{current && <span className="roadmap-now">Faça agora</span>}</li>})}</ol>{leadRoadmap.cadence.nextActionAt && leadRoadmap.cadence.status === 'ACTIVE' && <footer><b>Próximo contato previsto</b><time>{interactionDate(leadRoadmap.cadence.nextActionAt)}</time></footer>}</section>}
+        </>}
+      </section>}
 
       {(view === 'leads' || view === 'dashboard') && <>{view === 'leads' && leadFormOpen && <section className="report-panel lead-create-form"><div className="report-panel-heading"><div><p className="section-kicker">Novo contato</p><h2>Criar lead</h2></div></div><div className="form-fields"><label>Nome<input value={leadForm.name} onChange={event=>setLeadForm({...leadForm,name:event.target.value})} /></label><label>Telefone<input value={leadForm.phone} onChange={event=>setLeadForm({...leadForm,phone:event.target.value})} /></label><label>Email<input value={leadForm.email} onChange={event=>setLeadForm({...leadForm,email:event.target.value})} /></label><label>Categoria<input value={leadForm.desiredCategory} onChange={event=>setLeadForm({...leadForm,desiredCategory:event.target.value})} placeholder="Ex.: Varejo" /></label><label className="full-width">Tags<input value={leadForm.desiredTags} onChange={event=>setLeadForm({...leadForm,desiredTags:event.target.value})} placeholder="Separadas por vírgula" /></label></div><div className="actions"><button className="secondary" onClick={()=>setLeadFormOpen(false)}>Cancelar</button><button className="ai-save" disabled={leadCreating||!leadForm.name.trim()} onClick={()=>void createLead()}>{leadCreating?'Criando...':'Criar lead'}</button></div></section>}
       {isAdministrator() && view === 'dashboard' && <section className="operational-dashboard" aria-label="Prioridades da operação">
