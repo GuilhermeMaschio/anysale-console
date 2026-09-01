@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, cadenceEnrollmentApi, catalogApi, leadCreationApi, leadRoadmapApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadCadenceRoadmap, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
+import { api, cadenceEnrollmentApi, catalogApi, leadCreationApi, salesRoadmapApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadCadenceRoadmap, type LeadTask, type ManagedUser, type Product, type RoadmapPortfolioLead, type SalesPlaybook } from './api'
 import keycloak, { canManageCadences, currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
@@ -143,6 +143,7 @@ export default function App() {
   const [leadCadence, setLeadCadence] = useState<LeadCadence>()
   const [leadCadenceLoading, setLeadCadenceLoading] = useState(false)
   const [roadmapLeadId, setRoadmapLeadId] = useState('')
+  const [roadmapPortfolio, setRoadmapPortfolio] = useState<RoadmapPortfolioLead[]>([])
   const [leadRoadmap, setLeadRoadmap] = useState<LeadCadenceRoadmap>()
   const [roadmapLoading, setRoadmapLoading] = useState(false)
   const [roadmapError, setRoadmapError] = useState('')
@@ -225,9 +226,16 @@ export default function App() {
 
   const loadLeadRoadmap = async (leadId: string) => {
     if (!leadId) return
-    setRoadmapLoading(true); setRoadmapError('')
-    try { setLeadRoadmap(await leadRoadmapApi.get(leadId)) }
+    setRoadmapLoading(true); setRoadmapError(''); setLeadRoadmap(undefined)
+    try { setLeadRoadmap(await salesRoadmapApi.get(leadId)) }
     catch (error) { setLeadRoadmap(undefined); setRoadmapError(errorMessage(error, 'Ainda não há um roteiro ativo para este lead')) }
+    finally { setRoadmapLoading(false) }
+  }
+
+  const loadRoadmapPortfolio = async () => {
+    setRoadmapLoading(true); setRoadmapError('')
+    try { setRoadmapPortfolio(await salesRoadmapApi.portfolio()) }
+    catch (error) { setRoadmapPortfolio([]); setRoadmapError(errorMessage(error, 'Não foi possível carregar a sua carteira de negociações')) }
     finally { setRoadmapLoading(false) }
   }
 
@@ -361,11 +369,15 @@ export default function App() {
   useEffect(() => { if (authenticated && canManageCadences() && view === 'cadences') void loadCadences() }, [authenticated, view])
   useEffect(() => {
     if (!authenticated || canManageCadences() || view !== 'roadmap') return
-    const leadId = roadmapLeadId || leads.find((item) => !['WON', 'LOST'].includes(item.stage))?.id
+    void loadRoadmapPortfolio()
+  }, [authenticated, view])
+  useEffect(() => {
+    if (!authenticated || canManageCadences() || view !== 'roadmap' || roadmapPortfolio.length === 0) return
+    const leadId = roadmapPortfolio.some((item) => item.leadId === roadmapLeadId) ? roadmapLeadId : roadmapPortfolio[0].leadId
     if (!leadId) return
-    if (!roadmapLeadId) setRoadmapLeadId(leadId)
+    if (leadId !== roadmapLeadId) { setRoadmapLeadId(leadId); return }
     void loadLeadRoadmap(leadId)
-  }, [authenticated, view, roadmapLeadId, leads])
+  }, [authenticated, view, roadmapLeadId, roadmapPortfolio])
   useEffect(() => { if (authenticated && view === 'tasks') void loadTasks() }, [authenticated, view])
   useEffect(() => { if (authenticated) void loadTasks() }, [authenticated])
   const loadProducts = async () => { setProductsLoading(true); setProductsError(''); try { setProducts(await catalogApi.products()) } catch (error) { setProductsError(errorMessage(error, 'Não foi possível carregar os produtos')) } finally { setProductsLoading(false) } }
@@ -585,7 +597,7 @@ export default function App() {
   const todayTasks = openTasks.filter((task) => isSameLocalDay(task.dueAt, now))
   const replyTasks = openTasks.filter((task) => task.taskType === 'WHATSAPP_REPLY')
   const activeLeads = leads.filter((item) => !['WON', 'LOST'].includes(item.stage))
-  const roadmapLead = leads.find((item) => item.id === roadmapLeadId)
+  const roadmapLead = roadmapPortfolio.find((item) => item.leadId === roadmapLeadId)
   const roadmapCurrentStep = leadRoadmap?.steps.find((step) => step.position === leadRoadmap.cadence.nextPosition)
   const roadmapProgress = leadRoadmap ? Math.round((Math.min(leadRoadmap.cadence.nextPosition, leadRoadmap.steps.length) / Math.max(leadRoadmap.steps.length, 1)) * 100) : 0
 
@@ -620,8 +632,8 @@ export default function App() {
 
       {!canManageCadences() && view === 'roadmap' && <section className="sales-roadmap" aria-busy={roadmapLoading}>
         <header className="sales-roadmap-intro"><div><p className="section-kicker">Seu guia de atendimento</p><h2>Veja o que move cada venda para frente</h2><p>O roteiro conecta o contexto do cliente, a etapa atual e a melhor ação para você conduzir a negociação com confiança.</p></div><span aria-hidden="true">◌</span></header>
-        {activeLeads.length === 0 ? <section className="report-panel sales-roadmap-empty"><b>Nenhuma negociação ativa no momento</b><p>Quando um lead entrar na sua carteira, o roteiro comercial aparecerá aqui.</p></section> : <>
-          <section className="roadmap-portfolio" aria-label="Negociações em acompanhamento"><header><div><p className="section-kicker">Sua carteira em movimento</p><h2>Qual conversa você quer conduzir agora?</h2></div><span>{activeLeads.length} {activeLeads.length === 1 ? 'negociação ativa' : 'negociações ativas'}</span></header><div className="roadmap-lead-rail">{activeLeads.map((item) => <button className={item.id === roadmapLeadId ? 'selected' : ''} key={item.id} onClick={() => setRoadmapLeadId(item.id)} aria-pressed={item.id === roadmapLeadId}><span className="roadmap-lead-avatar">{item.name.slice(0, 1).toUpperCase()}</span><span><b>{item.name}</b><small>{stageLabel(item.stage)}{item.estimatedValue ? ` · ${formatCurrency(item.estimatedValue)}` : ''}</small></span><i>{item.id === roadmapLeadId ? 'Ver jornada' : 'Abrir roteiro'}</i></button>)}</div></section>
+        {!roadmapLoading && !roadmapError && roadmapPortfolio.length === 0 ? <section className="report-panel sales-roadmap-empty"><b>Nenhuma negociação na sua carteira ainda</b><p>Um lead aparece aqui quando você se torna responsável por ele ou atua em uma tarefa vinculada a essa negociação.</p></section> : <>
+          {roadmapPortfolio.length > 0 && <section className="roadmap-portfolio" aria-label="Negociações em acompanhamento"><header><div><p className="section-kicker">Sua carteira em movimento</p><h2>Qual conversa você quer conduzir agora?</h2></div><span>{roadmapPortfolio.length} {roadmapPortfolio.length === 1 ? 'negociação ativa' : 'negociações ativas'}</span></header><div className="roadmap-lead-rail">{roadmapPortfolio.map((item) => <button className={item.leadId === roadmapLeadId ? 'selected' : ''} key={item.leadId} onClick={() => setRoadmapLeadId(item.leadId)} aria-pressed={item.leadId === roadmapLeadId}><span className="roadmap-lead-avatar">{item.name.slice(0, 1).toUpperCase()}</span><span><b>{item.name}</b><small>{stageLabel(item.stage)}{item.estimatedValue ? ` · ${formatCurrency(item.estimatedValue)}` : ''}</small></span><i>{item.relationship === 'RESPONSIBLE' ? 'Responsável por você' : 'Você já atuou'}</i></button>)}</div></section>}
           {roadmapLoading && <div className="report-state">Montando o roteiro comercial...</div>}
           {!roadmapLoading && roadmapError && <section className="report-panel sales-roadmap-empty"><b>Este lead ainda não possui um roteiro ativo</b><p>Assim que a gestão comercial iniciar a cadência, os próximos passos aparecerão aqui.</p></section>}
           {!roadmapLoading && leadRoadmap && <section className="report-panel roadmap-story"><header><div><p className="section-kicker">{leadRoadmap.cadence.playbookName}</p><h2>A jornada de {roadmapLead?.name ?? 'este lead'}</h2><p>{leadRoadmap.cadence.status === 'PAUSED' ? 'O cliente respondeu e a sequência está pausada para que o time decida como avançar.' : leadRoadmap.cadence.status === 'COMPLETED' ? 'A sequência planejada terminou. Use o histórico e a etapa do funil para decidir o próximo movimento.' : 'Esta é a história da negociação até aqui. O ponto destacado mostra exatamente onde sua ação tem mais impacto.'}</p></div><span className={`roadmap-status roadmap-status-${leadRoadmap.cadence.status.toLowerCase()}`}>{cadenceStatusLabel(leadRoadmap.cadence.status)}</span></header><section className="roadmap-current-focus"><div><p>O momento desta venda</p><h3>{roadmapCurrentStep?.title ?? 'Acompanhar negociação'}</h3><span>{roadmapCurrentStep?.note ?? 'Siga o roteiro para avançar com consistência.'}</span></div><div className="roadmap-progress"><strong>{roadmapProgress}%</strong><span>da jornada mapeada</span><i><b style={{width:`${roadmapProgress}%`}} /></i></div></section><ol className="roadmap-steps">{leadRoadmap.steps.map((step) => { const completed = leadRoadmap.cadence.status === 'COMPLETED' || step.position < leadRoadmap.cadence.nextPosition; const current = !completed && step.position === leadRoadmap.cadence.nextPosition && leadRoadmap.cadence.status === 'ACTIVE'; return <li className={completed ? 'completed' : current ? 'current' : 'upcoming'} key={step.id}><span className="roadmap-step-number">{completed ? '✓' : step.position}</span><div><p>{completed ? 'Etapa concluída' : current ? 'Você está aqui' : 'Próximo capítulo'}</p><h3>{step.title}</h3><small>{step.note || 'Siga esta etapa para manter a negociação avançando no ritmo certo.'}</small></div>{current && <span className="roadmap-now">Sua ação</span>}</li>})}</ol>{leadRoadmap.cadence.nextActionAt && leadRoadmap.cadence.status === 'ACTIVE' && <footer><div><b>Próximo contato previsto</b><span>O ritmo da cadência mantém esta oportunidade viva.</span></div><time>{interactionDate(leadRoadmap.cadence.nextActionAt)}</time></footer>}</section>}
