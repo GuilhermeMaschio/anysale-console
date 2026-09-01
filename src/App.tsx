@@ -23,6 +23,7 @@ const stageLabels: Record<string, string> = {
 }
 type Notice = { message: string; type: 'error' | 'success' }
 type View = 'dashboard' | 'leads' | 'tasks' | 'roadmap' | 'cadences' | 'products' | 'users' | 'billing' | 'ai'
+type BillingReturn = 'success' | 'cancelled' | 'expired'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -39,6 +40,13 @@ function formatCurrency(value: number) {
 
 function formatBillingPrice(cents?: number) {
   return cents === undefined ? 'Sob consulta' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100)
+}
+
+function billingReturnFromPath(path: string): BillingReturn | undefined {
+  if (path.endsWith('/billing/success')) return 'success'
+  if (path.endsWith('/billing/cancelled')) return 'cancelled'
+  if (path.endsWith('/billing/expired')) return 'expired'
+  return undefined
 }
 
 function stageClass(stage: string) {
@@ -175,6 +183,7 @@ export default function App() {
   const [billingLoading, setBillingLoading] = useState(false)
   const [billingError, setBillingError] = useState('')
   const [checkoutPlanCode, setCheckoutPlanCode] = useState('')
+  const [billingReturn, setBillingReturn] = useState<BillingReturn | undefined>(() => billingReturnFromPath(window.location.pathname))
 
   const loadLead = async (id: string, openConversation = true) => {
     setSelectedId(id)
@@ -384,8 +393,14 @@ export default function App() {
     finally { setCheckoutPlanCode('') }
   }
 
+  const dismissBillingReturn = () => {
+    window.history.replaceState({}, document.title, '/')
+    setBillingReturn(undefined)
+  }
+
   useEffect(() => { if (authenticated && isAdministrator() && view === 'dashboard') void loadReport() }, [authenticated, view])
   useEffect(() => { if (authenticated && isAdministrator() && view === 'billing') void loadBilling() }, [authenticated, view])
+  useEffect(() => { if (authenticated && isAdministrator() && billingReturn) { setView('billing'); void loadBilling() } }, [authenticated, billingReturn])
   useEffect(() => { if (authenticated && !isAdministrator() && view === 'dashboard') setView('leads') }, [authenticated, view])
   useEffect(() => { if (authenticated && !canManageCadences() && view === 'cadences') setView('leads') }, [authenticated, view])
   useEffect(() => { if (authenticated && canManageCadences() && view === 'cadences') void loadCadences() }, [authenticated, view])
@@ -770,11 +785,13 @@ export default function App() {
           </div>
         </section>
 
+        {billingReturn && <section className={`billing-return billing-return-${billingReturn}`} role="status"><div><b>{billingReturn === 'success' ? 'Recebemos o retorno do pagamento' : billingReturn === 'cancelled' ? 'O pagamento foi cancelado' : 'O link de pagamento expirou'}</b><p>{billingReturn === 'success' ? 'Estamos confirmando a assinatura com o Asaas. Esta tela será atualizada assim que o webhook for processado.' : billingReturn === 'cancelled' ? 'Nenhuma cobrança foi realizada. Quando estiver pronto, escolha um plano novamente.' : 'Nenhuma cobrança foi realizada. Escolha um plano para gerar um novo link seguro.'}</p></div><div><button className="secondary" onClick={() => void loadBilling()} disabled={billingLoading}>Atualizar situação</button><button className="billing-return-dismiss" onClick={dismissBillingReturn} aria-label="Fechar aviso de pagamento">×</button></div></section>}
+
         {billingLoading && <div className="report-state">Carregando planos e assinatura...</div>}
         {!billingLoading && billingError && <div className="report-state report-error"><p>{billingError}</p><button className="retry" onClick={() => void loadBilling()}>Tentar novamente</button></div>}
         {!billingLoading && !billingError && <>
-          {billingSubscription?.planCode && <section className="billing-current panel"><div><div><p className="section-kicker">Plano atual</p><h3>{billingPlans.find((plan) => plan.code === billingSubscription.planCode)?.name ?? billingSubscription.planCode}</h3><p>{billingSubscription.status === 'ACTIVE' ? 'Sua assinatura está ativa. Você pode mudar de plano quando a sua operação precisar.' : 'Aguardamos a confirmação do pagamento para ativar os recursos do seu plano.'}</p></div><div className="billing-current-meta"><span>{billingSubscription.status === 'ACTIVE' ? 'Ativo' : 'Em configuração'}</span>{billingSubscription.trialEndsAt && <small>Primeira cobrança: {interactionDate(billingSubscription.trialEndsAt)}</small>}</div></div></section>}
-          <section className="billing-plans" aria-label="Planos disponíveis"><header><div><p className="section-kicker">Planos</p><h2>Escolha o ritmo da sua operação</h2><p>Comece com 14 dias para validar o processo comercial. A cobrança é mensal e o cartão é informado apenas no Asaas.</p></div></header><div className="billing-plan-grid">{billingPlans.map((plan) => { const selected = billingSubscription?.planCode === plan.code; const custom = !plan.monthlyPriceCents; const checkoutPending = selected && billingSubscription?.status === 'CHECKOUT_PENDING'; return <article className={`billing-plan ${selected ? 'current' : ''} ${custom ? 'custom' : ''}`} key={plan.code}><div className="billing-plan-header"><p>{selected ? 'Plano atual' : 'AnySale'}</p><h3>{plan.name}</h3><span>{plan.description}</span></div><div className="billing-price"><strong>{formatBillingPrice(plan.monthlyPriceCents)}</strong>{!custom && <span>/ mês</span>}</div><p className="billing-trial">{plan.trialDays} dias de teste · {plan.graceDays} dias de carência</p><ul><li><b>{plan.userLimit ?? '—'}</b> usuários</li><li><b>{plan.monthlyLeadLimit?.toLocaleString('pt-BR') ?? '—'}</b> leads por mês</li><li><b>{plan.monthlyAiRequestLimit?.toLocaleString('pt-BR') ?? '—'}</b> solicitações de IA por mês</li></ul>{custom ? <button className="secondary" disabled>Fale conosco</button> : <button className={selected ? 'secondary' : 'ai-save'} disabled={checkoutPlanCode === plan.code || billingSubscription?.status === 'ACTIVE' || checkoutPending} onClick={() => void startCheckout(plan)}>{checkoutPlanCode === plan.code ? 'Abrindo pagamento...' : checkoutPending ? 'Pagamento em andamento' : selected ? 'Plano selecionado' : 'Escolher este plano'}</button>}</article>})}</div></section>
+          {billingSubscription?.planCode && <section className="billing-current panel"><div><div><p className="section-kicker">Plano atual</p><h3>{billingPlans.find((plan) => plan.code === billingSubscription.planCode)?.name ?? billingSubscription.planCode}</h3><p>{billingSubscription.status === 'ACTIVE' ? 'Sua assinatura está ativa e os recursos do seu plano estão liberados.' : billingSubscription.status === 'CHECKOUT_PENDING' ? 'Aguardamos a conclusão do pagamento para ativar os recursos do seu plano.' : 'O último checkout não foi concluído. Você pode escolher um plano e tentar novamente.'}</p></div><div className="billing-current-meta"><span>{billingSubscription.status === 'ACTIVE' ? 'Ativo' : billingSubscription.status === 'CHECKOUT_PENDING' ? 'Em configuração' : 'Ação necessária'}</span>{billingSubscription.trialEndsAt && <small>Primeira cobrança: {interactionDate(billingSubscription.trialEndsAt)}</small>}</div></div></section>}
+          <section className="billing-plans" aria-label="Planos disponíveis"><header><div><p className="section-kicker">Planos</p><h2>Escolha o ritmo da sua operação</h2><p>Comece com 14 dias para validar o processo comercial. A cobrança é mensal e o cartão é informado apenas no Asaas.</p></div></header><div className="billing-plan-grid">{billingPlans.map((plan) => { const selected = billingSubscription?.planCode === plan.code; const custom = !plan.monthlyPriceCents; const checkoutPending = selected && billingSubscription?.status === 'CHECKOUT_PENDING'; const activeSubscription = billingSubscription?.status === 'ACTIVE'; const label = checkoutPlanCode === plan.code ? 'Abrindo pagamento...' : checkoutPending ? 'Pagamento em andamento' : activeSubscription ? selected ? 'Seu plano atual' : 'Alteração de plano em breve' : selected ? 'Escolher novamente' : 'Escolher este plano'; return <article className={`billing-plan ${selected ? 'current' : ''} ${custom ? 'custom' : ''}`} key={plan.code}><div className="billing-plan-header"><p>{selected ? 'Plano atual' : 'AnySale'}</p><h3>{plan.name}</h3><span>{plan.description}</span></div><div className="billing-price"><strong>{formatBillingPrice(plan.monthlyPriceCents)}</strong>{!custom && <span>/ mês</span>}</div><p className="billing-trial">{plan.trialDays} dias de teste · {plan.graceDays} dias de carência</p><ul><li><b>{plan.userLimit ?? '—'}</b> usuários</li><li><b>{plan.monthlyLeadLimit?.toLocaleString('pt-BR') ?? '—'}</b> leads por mês</li><li><b>{plan.monthlyAiRequestLimit?.toLocaleString('pt-BR') ?? '—'}</b> solicitações de IA por mês</li></ul>{custom ? <button className="secondary" disabled>Fale conosco</button> : <button className={selected ? 'secondary' : 'ai-save'} disabled={checkoutPlanCode === plan.code || activeSubscription || checkoutPending} onClick={() => void startCheckout(plan)}>{label}</button>}</article>})}</div></section>
           <p className="billing-security-note">🔒 O AnySale não armazena dados do seu cartão. A confirmação de pagamento é recebida diretamente do Asaas.</p>
         </>}
       </section>}
