@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, cadenceEnrollmentApi, catalogApi, leadCreationApi, leadRoadmapApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadCadenceRoadmap, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
+import { api, billingApi, cadenceEnrollmentApi, catalogApi, leadCreationApi, leadRoadmapApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type BillingPlan, type BillingSubscription, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadCadenceRoadmap, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
 import keycloak, { canManageCadences, currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
@@ -10,6 +10,7 @@ import './LeadWorkspace.css'
 import './OperationalDashboard.css'
 import './UserManagement.css'
 import './SalesRoadmap.css'
+import './Billing.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {
@@ -21,7 +22,8 @@ const stageLabels: Record<string, string> = {
   LOST: 'Fechado — perdido',
 }
 type Notice = { message: string; type: 'error' | 'success' }
-type View = 'dashboard' | 'leads' | 'tasks' | 'roadmap' | 'cadences' | 'products' | 'users' | 'ai'
+type View = 'dashboard' | 'leads' | 'tasks' | 'roadmap' | 'cadences' | 'products' | 'users' | 'billing' | 'ai'
+type BillingReturn = 'success' | 'cancelled' | 'expired'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -34,6 +36,17 @@ function interactionDate(value: string) {
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(value)
+}
+
+function formatBillingPrice(cents?: number) {
+  return cents === undefined ? 'Sob consulta' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100)
+}
+
+function billingReturnFromPath(path: string): BillingReturn | undefined {
+  if (path.endsWith('/billing/success')) return 'success'
+  if (path.endsWith('/billing/cancelled')) return 'cancelled'
+  if (path.endsWith('/billing/expired')) return 'expired'
+  return undefined
 }
 
 function stageClass(stage: string) {
@@ -165,6 +178,12 @@ export default function App() {
   const [userSaving, setUserSaving] = useState(false)
   const [userDeletingId, setUserDeletingId] = useState<string>()
   const [userForm, setUserForm] = useState({firstName:'', lastName:'', email:'', temporaryPassword:'', role:'SALES_AGENT', enabled:true})
+  const [billingPlans, setBillingPlans] = useState<BillingPlan[]>([])
+  const [billingSubscription, setBillingSubscription] = useState<BillingSubscription>()
+  const [billingLoading, setBillingLoading] = useState(false)
+  const [billingError, setBillingError] = useState('')
+  const [checkoutPlanCode, setCheckoutPlanCode] = useState('')
+  const [billingReturn, setBillingReturn] = useState<BillingReturn | undefined>(() => billingReturnFromPath(window.location.pathname))
 
   const loadLead = async (id: string, openConversation = true) => {
     setSelectedId(id)
@@ -355,7 +374,33 @@ export default function App() {
     }
   }
 
+  const loadBilling = async () => {
+    setBillingLoading(true); setBillingError('')
+    try {
+      const [plans, subscription] = await Promise.all([billingApi.plans(), billingApi.subscription()])
+      setBillingPlans(plans); setBillingSubscription(subscription)
+    } catch (error) { setBillingError(errorMessage(error, 'Não foi possível carregar a assinatura')) }
+    finally { setBillingLoading(false) }
+  }
+
+  const startCheckout = async (plan: BillingPlan) => {
+    if (!plan.monthlyPriceCents) return
+    setCheckoutPlanCode(plan.code); setBillingError('')
+    try {
+      const checkout = await billingApi.checkout(plan.code)
+      window.location.assign(checkout.checkoutUrl)
+    } catch (error) { setBillingError(errorMessage(error, 'Não foi possível iniciar o pagamento seguro')) }
+    finally { setCheckoutPlanCode('') }
+  }
+
+  const dismissBillingReturn = () => {
+    window.history.replaceState({}, document.title, '/')
+    setBillingReturn(undefined)
+  }
+
   useEffect(() => { if (authenticated && isAdministrator() && view === 'dashboard') void loadReport() }, [authenticated, view])
+  useEffect(() => { if (authenticated && isAdministrator() && view === 'billing') void loadBilling() }, [authenticated, view])
+  useEffect(() => { if (authenticated && isAdministrator() && billingReturn) { setView('billing'); void loadBilling() } }, [authenticated, billingReturn])
   useEffect(() => { if (authenticated && !isAdministrator() && view === 'dashboard') setView('leads') }, [authenticated, view])
   useEffect(() => { if (authenticated && !canManageCadences() && view === 'cadences') setView('leads') }, [authenticated, view])
   useEffect(() => { if (authenticated && canManageCadences() && view === 'cadences') void loadCadences() }, [authenticated, view])
@@ -603,6 +648,7 @@ export default function App() {
         {canManageCadences() && <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>}
         <button className={`nav-item ${view === 'products' ? 'active' : ''}`} title="Produtos e estoque" onClick={() => setView('products')}><span className="nav-icon">▣</span><span className="nav-label">Produtos</span></button>
         {isAdministrator() && <button className={`nav-item ${view === 'users' ? 'active' : ''}`} title="Usuários" onClick={() => setView('users')}><span className="nav-icon">♙</span><span className="nav-label">Usuários</span></button>}
+        {isAdministrator() && <button className={`nav-item ${view === 'billing' ? 'active' : ''}`} title="Assinatura e plano" onClick={() => setView('billing')}><span className="nav-icon">◈</span><span className="nav-label">Assinatura</span></button>}
         {isAdministrator() && <button className={`nav-item ${view === 'ai' ? 'active' : ''}`} title="Configuração de IA" onClick={() => setView('ai')}><span className="nav-icon">✦</span><span className="nav-label">IA</span></button>}
       </nav>
       <div className="sidebar-footer"><span className="status-dot" /><span className="sidebar-footer-label">Integração de leads ativa</span></div>
@@ -610,7 +656,7 @@ export default function App() {
 
     <main className="dashboard">
       <header className="topbar">
-        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'dashboard' ? 'Visão da operação' : view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'roadmap' ? 'Meu roteiro de vendas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'users' ? 'Usuários e acessos' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'dashboard' ? 'Priorize os próximos passos e acompanhe a saúde comercial do time.' : view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'roadmap' ? 'Entenda o momento de cada negociação e concentre-se no próximo melhor passo.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'users' ? 'Crie contas, defina responsabilidades e mantenha o acesso do time sob controle.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
+        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'dashboard' ? 'Visão da operação' : view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'roadmap' ? 'Meu roteiro de vendas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'users' ? 'Usuários e acessos' : view === 'billing' ? 'Assinatura e plano' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'dashboard' ? 'Priorize os próximos passos e acompanhe a saúde comercial do time.' : view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'roadmap' ? 'Entenda o momento de cada negociação e concentre-se no próximo melhor passo.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'users' ? 'Crie contas, defina responsabilidades e mantenha o acesso do time sob controle.' : view === 'billing' ? 'Escolha o plano da operação e acompanhe a situação da sua assinatura.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
         <div className="topbar-actions">{view === 'leads' && <button className="ai-save" onClick={() => setLeadFormOpen(true)}>Novo lead</button>}<button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
@@ -729,6 +775,25 @@ export default function App() {
         {productsLoading && <div className="report-state">Carregando produtos...</div>}
         {!productsLoading && productsError && <div className="report-state report-error"><p>{productsError}</p><button className="retry" onClick={() => void loadProducts()}>Tentar novamente</button></div>}
         {!productsLoading && !productsError && <section className="report-panel products-table"><div className="products-table-head"><span>Produto</span><span>Estoque disponível</span><span>Mínimo</span><span>Preço</span><span /></div>{products.length === 0 ? <p className="report-empty">Ainda não há produtos cadastrados para esta empresa.</p> : products.map((product) => <article key={product.id} className={product.lowStock ? 'low-stock' : ''}><div className="product-identity">{productImageUrls[product.id] ? <img className="product-thumbnail" src={productImageUrls[product.id]} alt="" /> : <span className="product-thumbnail product-thumbnail-empty" aria-hidden="true">▣</span>}<div><b>{product.title}</b><small>{product.sku} · {product.category}</small></div></div><strong>{product.availableQuantity}</strong><span>{product.reorderPoint}</span><span>{formatCurrency(product.price)}</span><button className="product-delete" onClick={() => void archiveProduct(product)}>Excluir</button></article>)}</section>}
+      </section>}
+
+      {isAdministrator() && view === 'billing' && <section className="billing-view" aria-busy={billingLoading}>
+        <section className="billing-hero">
+          <div><p className="section-kicker">Crescimento com previsibilidade</p><h2>Seu plano acompanha a operação</h2><p>Escolha como o AnySale apoia sua equipe. O pagamento acontece no ambiente seguro do Asaas; a liberação da assinatura é confirmada automaticamente.</p></div>
+          <div className={`billing-status billing-status-${billingSubscription?.accessStatus?.toLowerCase() ?? 'loading'}`}>
+            <span>{billingSubscription?.accessStatus === 'ACTIVE' ? '●' : '○'}</span><div><b>{billingSubscription?.accessStatus === 'ACTIVE' ? 'Acesso ativo' : billingSubscription?.status === 'CHECKOUT_PENDING' ? 'Pagamento pendente' : 'Plano não configurado'}</b><small>{billingSubscription?.planCode ? `Plano ${billingSubscription.planCode}` : 'Escolha um plano para começar'}</small></div>
+          </div>
+        </section>
+
+        {billingReturn && <section className={`billing-return billing-return-${billingReturn}`} role="status"><div><b>{billingReturn === 'success' ? 'Recebemos o retorno do pagamento' : billingReturn === 'cancelled' ? 'O pagamento foi cancelado' : 'O link de pagamento expirou'}</b><p>{billingReturn === 'success' ? 'Estamos confirmando a assinatura com o Asaas. Esta tela será atualizada assim que o webhook for processado.' : billingReturn === 'cancelled' ? 'Nenhuma cobrança foi realizada. Quando estiver pronto, escolha um plano novamente.' : 'Nenhuma cobrança foi realizada. Escolha um plano para gerar um novo link seguro.'}</p></div><div><button className="secondary" onClick={() => void loadBilling()} disabled={billingLoading}>Atualizar situação</button><button className="billing-return-dismiss" onClick={dismissBillingReturn} aria-label="Fechar aviso de pagamento">×</button></div></section>}
+
+        {billingLoading && <div className="report-state">Carregando planos e assinatura...</div>}
+        {!billingLoading && billingError && <div className="report-state report-error"><p>{billingError}</p><button className="retry" onClick={() => void loadBilling()}>Tentar novamente</button></div>}
+        {!billingLoading && !billingError && <>
+          {billingSubscription?.planCode && <section className="billing-current panel"><div><div><p className="section-kicker">Plano atual</p><h3>{billingPlans.find((plan) => plan.code === billingSubscription.planCode)?.name ?? billingSubscription.planCode}</h3><p>{billingSubscription.status === 'ACTIVE' ? 'Sua assinatura está ativa e os recursos do seu plano estão liberados.' : billingSubscription.status === 'CHECKOUT_PENDING' ? 'Aguardamos a conclusão do pagamento para ativar os recursos do seu plano.' : 'O último checkout não foi concluído. Você pode escolher um plano e tentar novamente.'}</p></div><div className="billing-current-meta"><span>{billingSubscription.status === 'ACTIVE' ? 'Ativo' : billingSubscription.status === 'CHECKOUT_PENDING' ? 'Em configuração' : 'Ação necessária'}</span>{billingSubscription.trialEndsAt && <small>Primeira cobrança: {interactionDate(billingSubscription.trialEndsAt)}</small>}</div></div></section>}
+          <section className="billing-plans" aria-label="Planos disponíveis"><header><div><p className="section-kicker">Planos</p><h2>Escolha o ritmo da sua operação</h2><p>Comece com 14 dias para validar o processo comercial. A cobrança é mensal e o cartão é informado apenas no Asaas.</p></div></header><div className="billing-plan-grid">{billingPlans.map((plan) => { const selected = billingSubscription?.planCode === plan.code; const custom = !plan.monthlyPriceCents; const checkoutPending = selected && billingSubscription?.status === 'CHECKOUT_PENDING'; const activeSubscription = billingSubscription?.status === 'ACTIVE'; const label = checkoutPlanCode === plan.code ? 'Abrindo pagamento...' : checkoutPending ? 'Pagamento em andamento' : activeSubscription ? selected ? 'Seu plano atual' : 'Alteração de plano em breve' : selected ? 'Escolher novamente' : 'Escolher este plano'; return <article className={`billing-plan ${selected ? 'current' : ''} ${custom ? 'custom' : ''}`} key={plan.code}><div className="billing-plan-header"><p>{selected ? 'Plano atual' : 'AnySale'}</p><h3>{plan.name}</h3><span>{plan.description}</span></div><div className="billing-price"><strong>{formatBillingPrice(plan.monthlyPriceCents)}</strong>{!custom && <span>/ mês</span>}</div><p className="billing-trial">{plan.trialDays} dias de teste · {plan.graceDays} dias de carência</p><ul><li><b>{plan.userLimit ?? '—'}</b> usuários</li><li><b>{plan.monthlyLeadLimit?.toLocaleString('pt-BR') ?? '—'}</b> leads por mês</li><li><b>{plan.monthlyAiRequestLimit?.toLocaleString('pt-BR') ?? '—'}</b> solicitações de IA por mês</li></ul>{custom ? <button className="secondary" disabled>Fale conosco</button> : <button className={selected ? 'secondary' : 'ai-save'} disabled={checkoutPlanCode === plan.code || activeSubscription || checkoutPending} onClick={() => void startCheckout(plan)}>{label}</button>}</article>})}</div></section>
+          <p className="billing-security-note">🔒 O AnySale não armazena dados do seu cartão. A confirmação de pagamento é recebida diretamente do Asaas.</p>
+        </>}
       </section>}
 
       {isAdministrator() && view === 'users' && <section className="users-view" aria-busy={usersLoading}>
