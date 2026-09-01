@@ -5,8 +5,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    // Necessário apenas para os túneis HTTPS temporários usados no Sandbox local.
-    allowedHosts: ['.trycloudflare.com'],
+    // Hosts públicos usados pelos túneis HTTPS do Sandbox local.
+    allowedHosts: ['.trycloudflare.com', 'sandbox-console.anysale.com.br'],
     proxy: {
       '/api': {
         target: 'http://localhost:8080',
