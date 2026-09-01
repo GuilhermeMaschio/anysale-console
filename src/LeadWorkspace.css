@@ -1,0 +1,48 @@
+/* Painel de atendimento: uma superfície clara e focada sobre o funil. */
+.detail-panel{
+  top:16px!important;right:16px!important;bottom:16px!important;left:16px!important;width:min(960px,calc(100vw - 32px))!important;height:fit-content;max-height:calc(100vh - 32px);margin:auto!important;transform:translateY(22px) scale(.98)!important;border:1px solid rgba(157,182,216,.65)!important;border-radius:20px!important;background:#f8fbff!important;box-shadow:0 28px 80px rgba(1,8,23,.48)!important
+}
+.detail-panel.open{transform:translateY(0) scale(1)!important}
+.detail-panel>.conversation-header{
+  min-height:82px;padding:18px 20px;border:0!important;border-bottom:1px solid #dde8f3!important;border-radius:19px 19px 0 0;background:linear-gradient(135deg,#fff 0%,#eff8ff 100%)!important;box-shadow:inset 0 -1px rgba(255,255,255,.8)
+}
+.detail-panel .detail-avatar{width:46px;height:46px;border-radius:14px;background:linear-gradient(145deg,#e1f5ff,#dff9ed);color:#12647a;box-shadow:0 7px 16px rgba(40,118,151,.14)}
+.detail-panel .conversation-identity h2{color:#182c48!important;font-size:18px;letter-spacing:-.035em}.detail-panel .lead-value{color:#47708b!important;font-weight:800}
+.detail-panel .conversation-close{margin-left:auto}
+.detail-panel .details-icon{width:38px;height:38px;min-height:38px;margin-left:auto;padding:0;border:1px solid #cbdcec;border-radius:12px;background:#fff;color:#53728e;font-size:17px;line-height:1;box-shadow:0 5px 13px rgba(31,72,113,.09)}.detail-panel .details-icon:hover,.detail-panel .details-icon[aria-expanded="true"]{border-color:#75b9d1;background:#eaf8fc;color:#12647a}
+.detail-panel .details-icon+.conversation-close{margin-left:8px}
+.detail-panel .details-toggle{min-height:36px;margin-left:auto;border:1px solid #cbdcec;background:#fff;color:#385b7a;box-shadow:0 5px 13px rgba(31,72,113,.09)}
+.detail-panel .conversation-close{
+  width:auto;height:38px;min-height:38px;padding:0 13px;border:1px solid #cbdcec;border-radius:12px;background:#fff;color:#59718c;font-size:11px;font-weight:800;box-shadow:0 5px 13px rgba(31,72,113,.09)
+}
+.detail-panel .conversation-close:hover{border-color:#86b4d4;background:#eef8ff;color:#12647a}
+.detail-panel .conversation-area{min-height:360px;padding:22px 24px;background:linear-gradient(150deg,#f4faff 0%,#f9fcff 58%,#f2fbf7 100%)!important}
+.detail-panel .conversation-area::before{height:4px;width:54px;margin-bottom:18px;background:linear-gradient(90deg,#49cbe8,#6ce7ad);opacity:1}
+.detail-panel .conversation-heading h3{color:#1b3854!important;font-size:14px}.detail-panel .conversation-empty{padding:30px;color:#6c849b}.detail-panel .conversation-empty span{width:38px;height:38px;margin:0 auto 11px;display:grid;place-items:center;border-radius:50%;background:#e6f4fb;color:#4b9db6;font-size:17px}
+.detail-panel .conversation-heading .section-kicker{margin:0 0 4px;text-transform:none;letter-spacing:0;color:#5b7993;font-size:11px;font-weight:750}.detail-panel .conversation-heading h3{font-size:16px;letter-spacing:-.025em}
+.detail-panel .message-bubble{box-shadow:0 5px 14px rgba(31,72,113,.06)}
+.detail-panel .composer{padding:16px 20px 17px;border-top:1px solid #d8e8e1!important;background:#fff!important}.detail-panel .composer textarea{min-height:82px;border-radius:12px!important;background:#f6fbf8!important;color:#203a50!important}.detail-panel .composer-footer{margin-top:10px;color:#668074!important}
+.detail-panel .conversation-test{margin:0 0 9px;padding:0;border:0;background:transparent}.detail-panel .conversation-test summary{display:inline-flex;align-items:center;min-height:28px;padding:0;color:#7890a6;font-size:10px;font-weight:700}.detail-panel .conversation-test summary:hover{color:#317392}
+.detail-panel .details-drawer{border-top:1px solid #dce8f1!important;background:#fff!important}.detail-panel .details-drawer-heading{padding:16px 20px;background:#fff!important;color:#42607b!important}.detail-panel .details-drawer-heading b{color:#1c3854!important}.detail-panel .details-content{padding:4px 20px 20px;border-top:1px solid #edf3f7}
+.detail-panel .details-drawer-heading{display:none}.detail-panel.details-open .details-drawer{position:absolute;z-index:5;top:82px;right:0;bottom:0;width:min(330px,88%);overflow-y:auto;border:0!important;border-left:1px solid #d6e4ee!important;background:#fff!important;box-shadow:-18px 0 34px rgba(25,54,81,.16)}.detail-panel.details-open .details-content{min-height:100%;padding:52px 20px 22px;border:0}.detail-panel.details-open .details-content::before{content:'Informações comerciais';position:absolute;top:0;right:0;left:0;padding:17px 20px;border-bottom:1px solid #e5eef4;background:#fff;color:#1d3a56;font-size:13px;font-weight:800}
+.detail-panel .lead-workspace{border-color:#cfe5ec;background:linear-gradient(135deg,#f2fbff,#f4fcf8)}
+
+@media(min-width:721px){
+  .detail-panel{left:260px!important;width:auto!important;height:auto!important;margin:0!important}
+  .conversation-scrim{left:244px!important}
+}
+
+@media(max-width:640px){
+  .detail-panel{width:100%;max-height:none;border-radius:0!important}.detail-panel>.conversation-header{min-height:72px;padding:13px 15px;border-radius:0}.detail-panel .detail-avatar{width:40px;height:40px;border-radius:12px}.detail-panel .conversation-area{min-height:calc(100vh - 278px);padding:18px 15px}.detail-panel .composer,.detail-panel .details-drawer-heading,.detail-panel .details-content{padding-left:15px;padding-right:15px}.detail-panel .conversation-close{height:36px;min-height:36px;padding-inline:11px}
+  .detail-panel.details-open .details-drawer{top:72px;width:min(330px,92%)}.detail-panel.details-open .details-content{padding-left:15px;padding-right:15px}.detail-panel.details-open .details-content::before{padding-left:15px;padding-right:15px}
+}
+/* Contraste dos controles e rolagem confinada à gaveta lateral. */
+.detail-panel .conversation-close{background:#164a6c!important;border-color:#164a6c!important;color:#fff!important;box-shadow:0 7px 16px rgba(22,74,108,.2)!important}.detail-panel .conversation-close:hover{background:#0d3855!important;border-color:#0d3855!important;color:#fff!important}
+.detail-panel .details-icon{background:#e1f6fb!important;border-color:#7bbbd1!important;color:#12647a!important}.detail-panel .details-icon:hover,.detail-panel .details-icon[aria-expanded="true"]{background:#c9eff8!important;border-color:#287b9b!important;color:#0d536d!important}
+.detail-panel button:disabled{background:#e8eff4!important;border-color:#d0dce5!important;color:#8a9baa!important;opacity:1!important}
+.detail-panel.details-open{overflow:hidden!important}.detail-panel.details-open .details-drawer::-webkit-scrollbar{width:8px}.detail-panel.details-open .details-drawer::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-clip:padding-box;background-color:#8ca9bc}
+.detail-panel .details-drawer .secondary{background:#d6f0f8!important;border-color:#75b5ca!important;color:#0d536d!important;box-shadow:0 5px 12px rgba(26,96,124,.12)!important}.detail-panel .details-drawer .secondary:hover:not(:disabled){background:#bde7f3!important;border-color:#287b9b!important;color:#083e54!important}
+.detail-panel .details-drawer .ai-save{background:linear-gradient(135deg,#15926e,#0d7657)!important;color:#fff!important;box-shadow:0 7px 15px rgba(13,118,87,.2)!important}.detail-panel .details-drawer .ai-save:hover:not(:disabled){background:linear-gradient(135deg,#117f60,#096348)!important}
+.detail-panel .lead-workspace-header{align-items:flex-start}.detail-panel .lead-workspace-header>div::after{content:'A cadência organiza o acompanhamento deste lead criando tarefas. Ela não altera a etapa do funil automaticamente.';display:block;max-width:245px;margin-top:5px;color:#58738a;font-size:10px;font-weight:500;line-height:1.4;text-transform:none;letter-spacing:0}
+.detail-panel .lead-cadence-card>div:first-child::after{content:'Ao iniciar, o playbook agenda os próximos contatos para a fila compartilhada.';display:block;max-width:205px;margin-top:7px;color:#5c7181;font-size:10px;line-height:1.4}.detail-panel .lead-cadence-card small{display:none}
+.detail-panel .details-content .field-help{margin:-2px 0 0;color:#647b8e;font-size:10px;font-weight:500;line-height:1.35}

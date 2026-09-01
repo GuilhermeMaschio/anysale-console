@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'react'
-import { api, catalogApi, type AiSettings, type AiSkill, type AiUsage, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadTask, type Product, type SalesPlaybook } from './api'
-import keycloak, { currentUserName, isAdministrator, signIn, signOut } from './auth'
+import { api, billingApi, cadenceEnrollmentApi, catalogApi, leadCreationApi, leadRoadmapApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type BillingPlan, type BillingSubscription, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadCadenceRoadmap, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
+import keycloak, { canManageCadences, currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
 import './TaskQueue.css'
 import './Playbook.css'
+import './ButtonStyles.css'
+import './LeadWorkspace.css'
+import './OperationalDashboard.css'
+import './UserManagement.css'
+import './SalesRoadmap.css'
+import './Billing.css'
 
 const stages = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST']
 const stageLabels: Record<string, string> = {
@@ -16,7 +22,8 @@ const stageLabels: Record<string, string> = {
   LOST: 'Fechado — perdido',
 }
 type Notice = { message: string; type: 'error' | 'success' }
-type View = 'leads' | 'tasks' | 'cadences' | 'products' | 'reports' | 'ai'
+type View = 'dashboard' | 'leads' | 'tasks' | 'roadmap' | 'cadences' | 'products' | 'users' | 'billing' | 'ai'
+type BillingReturn = 'success' | 'cancelled' | 'expired'
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? `${fallback} (${error.message})` : fallback
@@ -31,12 +38,40 @@ function formatCurrency(value: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(value)
 }
 
+function formatBillingPrice(cents?: number) {
+  return cents === undefined ? 'Sob consulta' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100)
+}
+
+function billingReturnFromPath(path: string): BillingReturn | undefined {
+  if (path.endsWith('/billing/success')) return 'success'
+  if (path.endsWith('/billing/cancelled')) return 'cancelled'
+  if (path.endsWith('/billing/expired')) return 'expired'
+  return undefined
+}
+
 function stageClass(stage: string) {
   return `stage stage-${stage.toLowerCase()}`
 }
 
 function stageLabel(stage: string) {
   return stageLabels[stage] ?? stage
+}
+
+function cadenceStatusLabel(status: string) {
+  return ({ ACTIVE: 'Em andamento', PAUSED: 'Aguardando decisão', COMPLETED: 'Concluída', CANCELLED: 'Encerrada' } as Record<string, string>)[status] ?? status
+}
+
+function taskStatusLabel(status: string) {
+  return ({ OPEN: 'Na fila', ASSIGNED: 'Em atendimento', COMPLETED: 'Concluída' } as Record<string, string>)[status] ?? status
+}
+
+function userRoleLabel(role: ManagedUser['role']) {
+  return ({ ADMIN: 'Administrador', SALES_MANAGER: 'Gerente comercial', SALES_AGENT: 'Vendedor' } as Record<ManagedUser['role'], string>)[role]
+}
+
+function isSameLocalDay(value: string, reference: Date) {
+  const date = new Date(value)
+  return !Number.isNaN(date.getTime()) && date.getFullYear() === reference.getFullYear() && date.getMonth() === reference.getMonth() && date.getDate() === reference.getDate()
 }
 
 function reportErrorMessage(error: unknown) {
@@ -84,7 +119,10 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [colorTheme, setColorTheme] = useState<'light' | 'dark'>('light')
   const [savingTheme, setSavingTheme] = useState(false)
-  const [view, setView] = useState<View>('leads')
+  const [view, setView] = useState<View>(() => isAdministrator() ? 'dashboard' : 'leads')
+  const [leadFormOpen, setLeadFormOpen] = useState(false)
+  const [leadCreating, setLeadCreating] = useState(false)
+  const [leadForm, setLeadForm] = useState({name:'', email:'', phone:'', source:'CONSOLE', desiredCategory:'', desiredTags:''})
   const [products, setProducts] = useState<Product[]>([])
   const [productImageUrls, setProductImageUrls] = useState<Record<string, string>>({})
   const [productsLoading, setProductsLoading] = useState(false)
@@ -113,8 +151,16 @@ export default function App() {
   const [cadenceLoading, setCadenceLoading] = useState(false)
   const [cadenceSaving, setCadenceSaving] = useState(false)
   const [cadenceError, setCadenceError] = useState('')
+  const [automaticEnrollment, setAutomaticEnrollment] = useState(false)
+  const [automaticEnrollmentSaving, setAutomaticEnrollmentSaving] = useState(false)
   const [leadCadence, setLeadCadence] = useState<LeadCadence>()
   const [leadCadenceLoading, setLeadCadenceLoading] = useState(false)
+  const [roadmapLeadId, setRoadmapLeadId] = useState('')
+  const [leadRoadmap, setLeadRoadmap] = useState<LeadCadenceRoadmap>()
+  const [roadmapLoading, setRoadmapLoading] = useState(false)
+  const [roadmapError, setRoadmapError] = useState('')
+  const [leadTasks, setLeadTasks] = useState<LeadTask[]>([])
+  const [leadTasksLoading, setLeadTasksLoading] = useState(false)
   const [availableTasks, setAvailableTasks] = useState<LeadTask[]>([])
   const [myTasks, setMyTasks] = useState<LeadTask[]>([])
   const [tasksLoading, setTasksLoading] = useState(false)
@@ -124,6 +170,20 @@ export default function App() {
   const [playbookSaving, setPlaybookSaving] = useState(false)
   const [editingPlaybookId, setEditingPlaybookId] = useState<string>()
   const [playbookForm, setPlaybookForm] = useState({name:'', description:'', categories:'', active:true, defaultPlaybook:false})
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([])
+  const [usersLoading, setUsersLoading] = useState(false)
+  const [usersError, setUsersError] = useState('')
+  const [userFormOpen, setUserFormOpen] = useState(false)
+  const [editingUserId, setEditingUserId] = useState<string>()
+  const [userSaving, setUserSaving] = useState(false)
+  const [userDeletingId, setUserDeletingId] = useState<string>()
+  const [userForm, setUserForm] = useState({firstName:'', lastName:'', email:'', temporaryPassword:'', role:'SALES_AGENT', enabled:true})
+  const [billingPlans, setBillingPlans] = useState<BillingPlan[]>([])
+  const [billingSubscription, setBillingSubscription] = useState<BillingSubscription>()
+  const [billingLoading, setBillingLoading] = useState(false)
+  const [billingError, setBillingError] = useState('')
+  const [checkoutPlanCode, setCheckoutPlanCode] = useState('')
+  const [billingReturn, setBillingReturn] = useState<BillingReturn | undefined>(() => billingReturnFromPath(window.location.pathname))
 
   const loadLead = async (id: string, openConversation = true) => {
     setSelectedId(id)
@@ -137,6 +197,7 @@ export default function App() {
     if (leadResult.status === 'fulfilled') {
       setLead(leadResult.value)
       void loadLeadCadence(leadResult.value.id)
+      void loadLeadTasks(leadResult.value.id)
     } else {
       setLead(undefined)
       setNotice({ message: errorMessage(leadResult.reason, 'Não foi possível carregar os dados do lead'), type: 'error' })
@@ -172,6 +233,8 @@ export default function App() {
 
   useEffect(() => { if (authenticated) void loadLeads() }, [authenticated])
 
+  const createLead = async () => { setLeadCreating(true); try { const created=await leadCreationApi.create({...leadForm,email:leadForm.email||undefined,phone:leadForm.phone||undefined,desiredCategory:leadForm.desiredCategory||undefined,desiredTags:leadForm.desiredTags.split(',').map(value=>value.trim()).filter(Boolean)}); setLeadFormOpen(false); await loadLeads(); await loadLead(created.id); setNotice({message:'Lead criado com sucesso.',type:'success'}); } catch(error) { setNotice({message:errorMessage(error,'Não foi possível criar o lead'),type:'error'}); } finally { setLeadCreating(false); } }
+
   const loadLeadCadence = async (leadId: string) => {
     setLeadCadenceLoading(true)
     try { setLeadCadence(await api.leadCadence(leadId)) }
@@ -179,10 +242,26 @@ export default function App() {
     finally { setLeadCadenceLoading(false) }
   }
 
+  const loadLeadRoadmap = async (leadId: string) => {
+    if (!leadId) return
+    setRoadmapLoading(true); setRoadmapError('')
+    try { setLeadRoadmap(await leadRoadmapApi.get(leadId)) }
+    catch (error) { setLeadRoadmap(undefined); setRoadmapError(errorMessage(error, 'Ainda não há um roteiro ativo para este lead')) }
+    finally { setRoadmapLoading(false) }
+  }
+
+  const loadLeadTasks = async (leadId: string) => {
+    setLeadTasksLoading(true)
+    try { setLeadTasks(await api.leadTasks(leadId)) }
+    catch { setLeadTasks([]) }
+    finally { setLeadTasksLoading(false) }
+  }
+
   const loadCadences = async () => {
     setCadenceLoading(true); setCadenceError('')
     try {
-      const available = await api.playbooks()
+      const [available, enrollment] = await Promise.all([api.playbooks(), cadenceEnrollmentApi.settings().catch(() => ({enabled:false}))])
+      setAutomaticEnrollment(enrollment.enabled)
       setPlaybooks(available)
       const selected = available.find((playbook) => playbook.id === selectedPlaybookId) ?? available[0]
       if (selected) { setSelectedPlaybookId(selected.id); setCadenceSteps(await api.cadenceSteps(selected.id)) }
@@ -222,12 +301,20 @@ export default function App() {
     finally { setCadenceSaving(false) }
   }
 
+  const saveAutomaticEnrollment = async (enabled: boolean) => {
+    setAutomaticEnrollmentSaving(true)
+    try { setAutomaticEnrollment((await cadenceEnrollmentApi.save(enabled)).enabled); setNotice({message: enabled ? 'Novos leads entrarão automaticamente na cadência.' : 'A entrada automática foi desativada.', type:'success'}) }
+    catch (error) { setCadenceError(errorMessage(error, 'Não foi possível atualizar a automação')) }
+    finally { setAutomaticEnrollmentSaving(false) }
+  }
+
   const operateLeadCadence = async (action: 'start' | 'pause' | 'resume' | 'cancel') => {
     if (!lead) return
     setLeadCadenceLoading(true)
     try {
       const call = action === 'start' ? api.startCadence : action === 'pause' ? api.pauseCadence : action === 'resume' ? api.resumeCadence : api.cancelCadence
       setLeadCadence(await call(lead.id))
+      await loadLeadTasks(lead.id)
     } catch (error) { setNotice({message:errorMessage(error, 'Não foi possível atualizar a cadência'), type:'error'}) }
     finally { setLeadCadenceLoading(false) }
   }
@@ -251,6 +338,11 @@ export default function App() {
       await loadTasks()
     } catch (error) { setTasksError(errorMessage(error, 'Não foi possível atualizar a tarefa')) }
     finally { setTaskUpdatingId(undefined) }
+  }
+
+  const openTaskLead = async (task: LeadTask) => {
+    setView('leads')
+    await loadLead(task.leadId)
   }
 
   useEffect(() => {
@@ -282,9 +374,45 @@ export default function App() {
     }
   }
 
-  useEffect(() => { if (authenticated && view === 'reports') void loadReport() }, [authenticated, view])
-  useEffect(() => { if (authenticated && view === 'cadences') void loadCadences() }, [authenticated, view])
+  const loadBilling = async () => {
+    setBillingLoading(true); setBillingError('')
+    try {
+      const [plans, subscription] = await Promise.all([billingApi.plans(), billingApi.subscription()])
+      setBillingPlans(plans); setBillingSubscription(subscription)
+    } catch (error) { setBillingError(errorMessage(error, 'Não foi possível carregar a assinatura')) }
+    finally { setBillingLoading(false) }
+  }
+
+  const startCheckout = async (plan: BillingPlan) => {
+    if (!plan.monthlyPriceCents) return
+    setCheckoutPlanCode(plan.code); setBillingError('')
+    try {
+      const checkout = await billingApi.checkout(plan.code)
+      window.location.assign(checkout.checkoutUrl)
+    } catch (error) { setBillingError(errorMessage(error, 'Não foi possível iniciar o pagamento seguro')) }
+    finally { setCheckoutPlanCode('') }
+  }
+
+  const dismissBillingReturn = () => {
+    window.history.replaceState({}, document.title, '/')
+    setBillingReturn(undefined)
+  }
+
+  useEffect(() => { if (authenticated && isAdministrator() && view === 'dashboard') void loadReport() }, [authenticated, view])
+  useEffect(() => { if (authenticated && isAdministrator() && view === 'billing') void loadBilling() }, [authenticated, view])
+  useEffect(() => { if (authenticated && isAdministrator() && billingReturn) { setView('billing'); void loadBilling() } }, [authenticated, billingReturn])
+  useEffect(() => { if (authenticated && !isAdministrator() && view === 'dashboard') setView('leads') }, [authenticated, view])
+  useEffect(() => { if (authenticated && !canManageCadences() && view === 'cadences') setView('leads') }, [authenticated, view])
+  useEffect(() => { if (authenticated && canManageCadences() && view === 'cadences') void loadCadences() }, [authenticated, view])
+  useEffect(() => {
+    if (!authenticated || canManageCadences() || view !== 'roadmap') return
+    const leadId = roadmapLeadId || leads.find((item) => !['WON', 'LOST'].includes(item.stage))?.id
+    if (!leadId) return
+    if (!roadmapLeadId) setRoadmapLeadId(leadId)
+    void loadLeadRoadmap(leadId)
+  }, [authenticated, view, roadmapLeadId, leads])
   useEffect(() => { if (authenticated && view === 'tasks') void loadTasks() }, [authenticated, view])
+  useEffect(() => { if (authenticated) void loadTasks() }, [authenticated])
   const loadProducts = async () => { setProductsLoading(true); setProductsError(''); try { setProducts(await catalogApi.products()) } catch (error) { setProductsError(errorMessage(error, 'Não foi possível carregar os produtos')) } finally { setProductsLoading(false) } }
   useEffect(() => { if (authenticated && view === 'products') void loadProducts() }, [authenticated, view])
   useEffect(() => {
@@ -312,6 +440,39 @@ export default function App() {
   }
 
   useEffect(() => { if (authenticated && view === 'ai' && isAdministrator()) void loadAi() }, [authenticated, view])
+
+  const loadUsers = async () => {
+    setUsersLoading(true); setUsersError('')
+    try { setManagedUsers(await userManagementApi.users()) }
+    catch (error) { setUsersError(errorMessage(error, 'Não foi possível carregar os usuários')) }
+    finally { setUsersLoading(false) }
+  }
+  useEffect(() => { if (authenticated && view === 'users' && isAdministrator()) void loadUsers() }, [authenticated, view])
+  const openUserForm = (user?: ManagedUser) => {
+    setEditingUserId(user?.id)
+    setUserForm(user ? {firstName:user.firstName, lastName:user.lastName, email:user.email, temporaryPassword:'', role:user.role, enabled:user.enabled} : {firstName:'', lastName:'', email:'', temporaryPassword:'', role:'SALES_AGENT', enabled:true})
+    setUserFormOpen(true)
+  }
+  const saveUser = async () => {
+    setUserSaving(true); setUsersError('')
+    try {
+      const updated = editingUserId
+        ? await userManagementApi.update(editingUserId, {firstName:userForm.firstName, lastName:userForm.lastName, email:userForm.email, role:userForm.role, enabled:userForm.enabled})
+        : await userManagementApi.create({firstName:userForm.firstName, lastName:userForm.lastName, email:userForm.email, temporaryPassword:userForm.temporaryPassword, role:userForm.role})
+      setUserFormOpen(false); await loadUsers(); setNotice({message: editingUserId ? `${updated.firstName} foi atualizado.` : `${updated.firstName} foi criado e deverá trocar a senha no primeiro acesso.`, type:'success'})
+    } catch (error) { setUsersError(errorMessage(error, 'Não foi possível salvar o usuário')) }
+    finally { setUserSaving(false) }
+  }
+  const deleteUser = async (user: ManagedUser) => {
+    if (!window.confirm(`Excluir ${user.firstName} ${user.lastName}? Esta ação remove o acesso ao AnySale de forma permanente.`)) return
+    setUserDeletingId(user.id); setUsersError('')
+    try {
+      await userManagementApi.remove(user.id)
+      await loadUsers()
+      setNotice({message: `${user.firstName} foi excluído do AnySale.`, type:'success'})
+    } catch (error) { setUsersError(errorMessage(error, 'Não foi possível excluir o usuário')) }
+    finally { setUserDeletingId(undefined) }
+  }
 
   const saveAi = async () => {
     if (!aiSettings) return
@@ -463,6 +624,13 @@ export default function App() {
   const closedRevenue = leads.reduce((total, item) => total + (item.actualValue ?? 0), 0)
   const wonLeads = leads.filter((item) => item.stage === 'WON').length
   const conversion = leads.length ? Math.round((wonLeads / leads.length) * 100) : 0
+  const now = new Date()
+  const openTasks = [...availableTasks, ...myTasks].filter((task) => task.status !== 'COMPLETED')
+  const overdueTasks = openTasks.filter((task) => new Date(task.dueAt).getTime() < now.getTime())
+  const todayTasks = openTasks.filter((task) => isSameLocalDay(task.dueAt, now))
+  const replyTasks = openTasks.filter((task) => task.taskType === 'WHATSAPP_REPLY')
+  const activeLeads = leads.filter((item) => !['WON', 'LOST'].includes(item.stage))
+  const roadmapLead = leads.find((item) => item.id === roadmapLeadId)
 
   const operatorName = currentUserName()
   const operatorInitials = operatorName.split(' ').filter(Boolean).slice(0, 2).map((name) => name[0]).join('').toUpperCase() || 'OP'
@@ -473,11 +641,14 @@ export default function App() {
       <button className="sidebar-toggle" onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}><span>{sidebarCollapsed ? '›' : '‹'}</span><b>{sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'}</b></button>
       <div className="workspace-name"><span className="workspace-dot" /><span className="workspace-label">Operação comercial</span></div>
       <nav aria-label="Navegação principal">
+        {isAdministrator() && <button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} title="Dashboard" onClick={() => setView('dashboard')}><span className="nav-icon">▦</span><span className="nav-label">Dashboard</span></button>}
         <button className={`nav-item ${view === 'leads' ? 'active' : ''}`} title="Leads" onClick={() => setView('leads')}><span className="nav-icon">◫</span><span className="nav-label">Leads</span><span className="nav-count">{leads.length}</span></button>
         <button className={`nav-item ${view === 'tasks' ? 'active' : ''}`} title="Fila de tarefas" onClick={() => setView('tasks')}><span className="nav-icon">✓</span><span className="nav-label">Tarefas</span>{myTasks.length > 0 && <span className="nav-count">{myTasks.length}</span>}</button>
-        <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>
+        {!canManageCadences() && <button className={`nav-item ${view === 'roadmap' ? 'active' : ''}`} title="Meu roteiro de vendas" onClick={() => setView('roadmap')}><span className="nav-icon">◌</span><span className="nav-label">Meu roteiro</span></button>}
+        {canManageCadences() && <button className={`nav-item ${view === 'cadences' ? 'active' : ''}`} title="Cadências" onClick={() => setView('cadences')}><span className="nav-icon">◷</span><span className="nav-label">Cadências</span></button>}
         <button className={`nav-item ${view === 'products' ? 'active' : ''}`} title="Produtos e estoque" onClick={() => setView('products')}><span className="nav-icon">▣</span><span className="nav-label">Produtos</span></button>
-        <button className={`nav-item ${view === 'reports' ? 'active' : ''}`} title="Relatórios" onClick={() => setView('reports')}><span className="nav-icon">▥</span><span className="nav-label">Relatórios</span></button>
+        {isAdministrator() && <button className={`nav-item ${view === 'users' ? 'active' : ''}`} title="Usuários" onClick={() => setView('users')}><span className="nav-icon">♙</span><span className="nav-label">Usuários</span></button>}
+        {isAdministrator() && <button className={`nav-item ${view === 'billing' ? 'active' : ''}`} title="Assinatura e plano" onClick={() => setView('billing')}><span className="nav-icon">◈</span><span className="nav-label">Assinatura</span></button>}
         {isAdministrator() && <button className={`nav-item ${view === 'ai' ? 'active' : ''}`} title="Configuração de IA" onClick={() => setView('ai')}><span className="nav-icon">✦</span><span className="nav-label">IA</span></button>}
       </nav>
       <div className="sidebar-footer"><span className="status-dot" /><span className="sidebar-footer-label">Integração de leads ativa</span></div>
@@ -485,21 +656,46 @@ export default function App() {
 
     <main className="dashboard">
       <header className="topbar">
-        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'reports' ? 'Relatórios comerciais' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'reports' ? 'Acompanhe os indicadores e o desempenho da sua operação.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
-        <div className="topbar-actions"><button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
+        <div><p className="eyebrow">Console de vendas</p><h1>{view === 'dashboard' ? 'Visão da operação' : view === 'leads' ? 'Leads e conversões' : view === 'tasks' ? 'Fila de tarefas' : view === 'roadmap' ? 'Meu roteiro de vendas' : view === 'cadences' ? 'Cadências comerciais' : view === 'products' ? 'Produtos e estoque' : view === 'users' ? 'Usuários e acessos' : view === 'billing' ? 'Assinatura e plano' : 'Configuração de IA'}</h1><p className="subtitle">{view === 'dashboard' ? 'Priorize os próximos passos e acompanhe a saúde comercial do time.' : view === 'leads' ? 'Acompanhe as oportunidades e mantenha sua operação em movimento.' : view === 'tasks' ? 'Assuma e conclua os próximos passos do atendimento.' : view === 'roadmap' ? 'Entenda o momento de cada negociação e concentre-se no próximo melhor passo.' : view === 'cadences' ? 'Defina os próximos passos automáticos para cada tipo de venda.' : view === 'products' ? 'Gerencie os itens disponíveis para a sua operação comercial.' : view === 'users' ? 'Crie contas, defina responsabilidades e mantenha o acesso do time sob controle.' : view === 'billing' ? 'Escolha o plano da operação e acompanhe a situação da sua assinatura.' : 'Controle o uso da IA e seus limites de operação.'}</p></div>
+        <div className="topbar-actions">{view === 'leads' && <button className="ai-save" onClick={() => setLeadFormOpen(true)}>Novo lead</button>}<button className="theme-toggle" onClick={() => void toggleTheme()} disabled={savingTheme} aria-label="Alternar tema">{colorTheme === 'light' ? '◐ Modo escuro' : '☀ Modo claro'}</button><div className="operator"><div className="operator-avatar">{operatorInitials}</div><div><strong>{operatorName}</strong><span>Time comercial</span></div><button className="logout" onClick={() => void signOut()}>Sair</button></div></div>
       </header>
 
       {view === 'leads' && notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
 
-      {view === 'leads' && <>
-      <section className="metrics" aria-label="Resumo da operação">
+      {!canManageCadences() && view === 'roadmap' && <section className="sales-roadmap" aria-busy={roadmapLoading}>
+        <header className="sales-roadmap-intro"><div><p className="section-kicker">Seu guia de atendimento</p><h2>Entenda a história de cada venda</h2><p>Escolha um lead para ver onde a negociação está, o objetivo do momento e os próximos contatos previstos.</p></div><span aria-hidden="true">◌</span></header>
+        {activeLeads.length === 0 ? <section className="report-panel sales-roadmap-empty"><b>Nenhuma negociação ativa no momento</b><p>Quando um lead entrar na sua carteira, o roteiro comercial aparecerá aqui.</p></section> : <>
+          <label className="sales-roadmap-picker">Lead que você está acompanhando<select value={roadmapLeadId} onChange={(event) => setRoadmapLeadId(event.target.value)}>{activeLeads.map((item) => <option key={item.id} value={item.id}>{item.name} — {stageLabel(item.stage)}</option>)}</select></label>
+          {roadmapLoading && <div className="report-state">Montando o roteiro comercial...</div>}
+          {!roadmapLoading && roadmapError && <section className="report-panel sales-roadmap-empty"><b>Este lead ainda não possui um roteiro ativo</b><p>Assim que a gestão comercial iniciar a cadência, os próximos passos aparecerão aqui.</p></section>}
+          {!roadmapLoading && leadRoadmap && <section className="report-panel roadmap-story"><header><div><p className="section-kicker">{leadRoadmap.cadence.playbookName}</p><h2>{roadmapLead?.name ?? 'Lead selecionado'}</h2><p>{leadRoadmap.cadence.status === 'PAUSED' ? 'O roteiro está pausado para a equipe avaliar a resposta do cliente.' : leadRoadmap.cadence.status === 'COMPLETED' ? 'Este roteiro foi concluído. Consulte as tarefas e a etapa do lead para definir o próximo movimento.' : 'Siga a sequência abaixo. Cada etapa mostra o objetivo do contato e prepara a próxima ação.'}</p></div><span className={`roadmap-status roadmap-status-${leadRoadmap.cadence.status.toLowerCase()}`}>{cadenceStatusLabel(leadRoadmap.cadence.status)}</span></header><ol className="roadmap-steps">{leadRoadmap.steps.map((step) => { const completed = leadRoadmap.cadence.status === 'COMPLETED' || step.position < leadRoadmap.cadence.nextPosition; const current = !completed && step.position === leadRoadmap.cadence.nextPosition && leadRoadmap.cadence.status === 'ACTIVE'; return <li className={completed ? 'completed' : current ? 'current' : 'upcoming'} key={step.id}><span className="roadmap-step-number">{completed ? '✓' : step.position}</span><div><p>{completed ? 'Etapa concluída' : current ? 'Você está aqui' : 'Próximo passo'}</p><h3>{step.title}</h3><small>{step.note || 'Siga esta etapa para manter a negociação avançando no ritmo certo.'}</small></div>{current && <span className="roadmap-now">Faça agora</span>}</li>})}</ol>{leadRoadmap.cadence.nextActionAt && leadRoadmap.cadence.status === 'ACTIVE' && <footer><b>Próximo contato previsto</b><time>{interactionDate(leadRoadmap.cadence.nextActionAt)}</time></footer>}</section>}
+        </>}
+      </section>}
+
+      {(view === 'leads' || view === 'dashboard') && <>{view === 'leads' && leadFormOpen && <section className="report-panel lead-create-form"><div className="report-panel-heading"><div><p className="section-kicker">Novo contato</p><h2>Criar lead</h2></div></div><div className="form-fields"><label>Nome<input value={leadForm.name} onChange={event=>setLeadForm({...leadForm,name:event.target.value})} /></label><label>Telefone<input value={leadForm.phone} onChange={event=>setLeadForm({...leadForm,phone:event.target.value})} /></label><label>Email<input value={leadForm.email} onChange={event=>setLeadForm({...leadForm,email:event.target.value})} /></label><label>Categoria<input value={leadForm.desiredCategory} onChange={event=>setLeadForm({...leadForm,desiredCategory:event.target.value})} placeholder="Ex.: Varejo" /></label><label className="full-width">Tags<input value={leadForm.desiredTags} onChange={event=>setLeadForm({...leadForm,desiredTags:event.target.value})} placeholder="Separadas por vírgula" /></label></div><div className="actions"><button className="secondary" onClick={()=>setLeadFormOpen(false)}>Cancelar</button><button className="ai-save" disabled={leadCreating||!leadForm.name.trim()} onClick={()=>void createLead()}>{leadCreating?'Criando...':'Criar lead'}</button></div></section>}
+      {isAdministrator() && view === 'dashboard' && <section className="operational-dashboard" aria-label="Prioridades da operação">
+        <div className="operational-dashboard-heading"><div><p className="section-kicker">Prioridades de hoje</p><h2>O que precisa da atenção do time</h2><p>Use a fila para assumir e concluir os próximos passos vinculados aos leads.</p></div><button className="ai-save" onClick={() => setView('tasks')}>Abrir fila de tarefas</button></div>
+        <div className="operational-priority-grid">
+          <article className={`operational-priority ${overdueTasks.length ? 'is-critical' : ''}`}><span className="operational-priority-icon">!</span><div><b>{overdueTasks.length}</b><strong>Tarefas vencidas</strong><small>{overdueTasks.length ? 'Precisam de ação antes de novas demandas.' : 'Nenhuma pendência vencida.'}</small></div></article>
+          <article className="operational-priority"><span className="operational-priority-icon">◷</span><div><b>{todayTasks.length}</b><strong>Para hoje</strong><small>Contatos e retornos previstos para esta data.</small></div></article>
+          <article className="operational-priority"><span className="operational-priority-icon">↗</span><div><b>{availableTasks.length}</b><strong>Na fila compartilhada</strong><small>Tarefas disponíveis para qualquer pessoa do time assumir.</small></div></article>
+          <article className={`operational-priority ${replyTasks.length ? 'is-attention' : ''}`}><span className="operational-priority-icon">◌</span><div><b>{replyTasks.length}</b><strong>Respostas aguardando</strong><small>Clientes que responderam e precisam de decisão comercial.</small></div></article>
+        </div>
+      </section>}
+
+      {isAdministrator() && view === 'dashboard' && <section className="metrics" aria-label="Resumo da operação">
         <article className="metric-card"><div className="metric-icon blue">◫</div><div><p>Leads em acompanhamento</p><strong>{leads.length}</strong><span>Base carregada</span></div></article>
         <article className="metric-card"><div className="metric-icon violet">↗</div><div><p>Potencial em negociação</p><strong>{formatCurrency(estimatedPipeline)}</strong><span>Oportunidades abertas</span></div></article>
         <article className="metric-card"><div className="metric-icon mint">✓</div><div><p>Receita realizada</p><strong>{formatCurrency(closedRevenue)}</strong><span>{wonLeads} negócios ganhos</span></div></article>
         <article className="metric-card"><div className="metric-icon amber">◌</div><div><p>Conversão atual</p><strong>{conversion}%</strong><span>Sobre a base carregada</span></div></article>
-      </section>
+      </section>}
 
-      <div className="workspace-grid">
+      {isAdministrator() && view === 'dashboard' && <section className="dashboard-insights" aria-label="Visão de acompanhamento">
+        <article className="dashboard-insight"><div><p className="section-kicker">Cadência e tarefas</p><h2>Próximos contatos sob controle</h2></div><p><b>{openTasks.length}</b> tarefas abertas mantêm os próximos passos visíveis para o time.</p><button className="secondary" onClick={() => setView('cadences')}>Configurar cadências</button></article>
+        <article className="dashboard-insight"><div><p className="section-kicker">Saúde do funil</p><h2>Oportunidades em movimento</h2></div><p><b>{activeLeads.length}</b> leads ainda estão em negociação, representando <b>{formatCurrency(estimatedPipeline)}</b> de potencial.</p><button className="secondary" onClick={() => void loadReport()}>Atualizar indicadores</button></article>
+      </section>}
+
+      {view === 'leads' && <div className="workspace-grid">
         <section className="panel kanban-panel" aria-busy={listLoading}>
           <div className="panel-heading"><div><p className="section-kicker">Carteira</p><h2>Leads por etapa</h2></div><div className="kanban-heading-meta"><span className="pill-count">{listLoading ? 'Carregando' : `${leads.length} no total`}</span><span>Arraste um lead para atualizar a etapa</span></div></div>
           <div className="kanban-board">
@@ -518,14 +714,14 @@ export default function App() {
           </div>
         </section>
 
-        <section className={`panel detail-panel ${conversationOpen ? 'open' : ''}`} aria-busy={detailLoading} aria-label="Painel de atendimento" role="dialog" aria-modal={conversationOpen}>
+        <section className={`panel detail-panel ${conversationOpen ? 'open' : ''} ${detailsOpen ? 'details-open' : ''}`} aria-busy={detailLoading} aria-label="Painel de atendimento" role="dialog" aria-modal={conversationOpen}>
           {detailLoading && <p className="empty-state">Carregando dados do lead...</p>}
           {!detailLoading && !lead && <p className="empty-state">Selecione um lead para ver os detalhes.</p>}
           {!detailLoading && lead && <>
-            <div className="conversation-header"><div className="avatar detail-avatar">{lead.name[0]}</div><div className="conversation-identity"><h2>{lead.name}</h2><div><span className={stageClass(lead.stage)}>{stageLabel(lead.stage)}</span><span className="lead-value">{formatCurrency(lead.actualValue ?? lead.estimatedValue ?? 0)}</span></div></div><button className="details-toggle" onClick={() => setDetailsOpen((isOpen) => !isOpen)} aria-expanded={detailsOpen}>Detalhes <span>{detailsOpen ? '⌃' : '⌄'}</span></button><button className="conversation-close" onClick={() => setConversationOpen(false)} aria-label="Fechar atendimento">×</button>{saving && <span className="saving">Salvando...</span>}</div>
+            <div className="conversation-header"><div className="avatar detail-avatar">{lead.name[0]}</div><div className="conversation-identity"><h2>{lead.name}</h2><div><span className={stageClass(lead.stage)}>{stageLabel(lead.stage)}</span><span className="lead-value">{formatCurrency(lead.actualValue ?? lead.estimatedValue ?? 0)}</span></div></div><button className="details-icon" onClick={() => setDetailsOpen((isOpen) => !isOpen)} aria-label="Abrir informações comerciais" aria-expanded={detailsOpen}>▤</button><button className="conversation-close" onClick={() => setConversationOpen(false)} aria-label="Fechar atendimento">Fechar</button>{saving && <span className="saving">Salvando...</span>}</div>
 
             <section className="conversation-area" aria-label="Conversa com o lead">
-              <div className="conversation-heading"><div><p className="section-kicker">Atendimento</p><h3>Histórico da conversa</h3></div>{interactionsLoading && <span className="loading-label">Carregando...</span>}</div>
+              <div className="conversation-heading"><div><p className="section-kicker">Conversa</p><h3>Histórico</h3></div>{interactionsLoading && <span className="loading-label">Carregando...</span>}</div>
               {interactionsError && <p className="inline-error">{interactionsError}</p>}
               {!interactionsLoading && !interactionsError && interactions.length === 0 && <div className="conversation-empty"><span>◌</span><p>Ainda não há mensagens nesta conversa.</p></div>}
               {!interactionsLoading && interactions.length > 0 && <div className="conversation-messages">{interactions.map((interaction) => { const outbound = interaction.direction === 'OUTBOUND' || interaction.direction === 'OUT'; return <article key={interaction.id} className={`message-bubble ${outbound ? 'outbound' : 'inbound'}`}><p>{interaction.message}</p><footer><span>{outbound ? 'Equipe comercial' : lead.name}</span><time>{interactionDate(interaction.createdAt)}</time></footer></article> })}</div>}
@@ -535,9 +731,9 @@ export default function App() {
 
             <section className={`details-drawer ${detailsOpen ? 'open' : ''}`}>
               <button className="details-drawer-heading" onClick={() => setDetailsOpen((isOpen) => !isOpen)} aria-expanded={detailsOpen}><span><b>Informações comerciais</b><small>Etapa, responsável e valores</small></span><span>{detailsOpen ? 'Ocultar' : 'Ver detalhes'} <i>{detailsOpen ? '⌃' : '⌄'}</i></span></button>
-              {detailsOpen && <div className="details-content"><section className="lead-cadence-card"><div><b>Cadência comercial</b><small>{leadCadenceLoading ? 'Consultando...' : leadCadence ? `${leadCadence.playbookName} · ${leadCadence.status}` : 'Nenhuma cadência ativa'}</small>{leadCadence?.nextActionAt && <small>Próxima tarefa: {interactionDate(leadCadence.nextActionAt)}</small>}</div><div className="lead-cadence-actions">{!leadCadence && <button className="secondary" onClick={() => void operateLeadCadence('start')} disabled={leadCadenceLoading}>Iniciar</button>}{leadCadence?.status === 'ACTIVE' && <button className="secondary" onClick={() => void operateLeadCadence('pause')} disabled={leadCadenceLoading}>Pausar</button>}{leadCadence?.status === 'PAUSED' && <button className="secondary" onClick={() => void operateLeadCadence('resume')} disabled={leadCadenceLoading}>Retomar</button>}{leadCadence && !['COMPLETED','CANCELLED'].includes(leadCadence.status) && <button className="secondary" onClick={() => void operateLeadCadence('cancel')} disabled={leadCadenceLoading}>Cancelar</button>}</div></section><div className="form-fields">
+              {detailsOpen && <div className="details-content"><section className="lead-workspace"><div className="lead-workspace-header"><div><p className="section-kicker">Próximo passo comercial</p><h3>Cadência e tarefas</h3></div>{leadCadence && <span className={`cadence-status cadence-status-${leadCadence.status.toLowerCase()}`}>{cadenceStatusLabel(leadCadence.status)}</span>}</div><div className="lead-cadence-card"><div><b>{leadCadenceLoading ? 'Consultando cadência...' : leadCadence?.playbookName ?? 'Nenhuma cadência ativa'}</b><small>{leadCadence?.nextActionAt ? `Próxima ação: ${interactionDate(leadCadence.nextActionAt)}` : leadCadence ? 'Não há próxima ação agendada.' : 'Inicie uma cadência para organizar os próximos contatos.'}</small></div><div className="lead-cadence-actions">{!leadCadence && <button className="secondary" onClick={() => void operateLeadCadence('start')} disabled={leadCadenceLoading}>Iniciar cadência</button>}{leadCadence?.status === 'ACTIVE' && <button className="secondary" onClick={() => void operateLeadCadence('pause')} disabled={leadCadenceLoading}>Pausar</button>}{leadCadence?.status === 'PAUSED' && <button className="secondary" onClick={() => void operateLeadCadence('resume')} disabled={leadCadenceLoading}>Retomar</button>}{leadCadence && !['COMPLETED','CANCELLED'].includes(leadCadence.status) && <button className="secondary" onClick={() => void operateLeadCadence('cancel')} disabled={leadCadenceLoading}>Encerrar</button>}</div></div><div className="lead-task-history"><div className="lead-task-history-heading"><b>Histórico de tarefas</b><span>{leadTasksLoading ? 'Carregando...' : `${leadTasks.length} ${leadTasks.length === 1 ? 'tarefa' : 'tarefas'}`}</span></div>{!leadTasksLoading && leadTasks.length === 0 && <p className="lead-task-empty">Nenhuma tarefa criada para este lead ainda.</p>}{leadTasks.slice(0, 4).map((task) => <article className="lead-task-item" key={task.id}><span className={`lead-task-dot lead-task-${task.status.toLowerCase()}`} /><div><b>{task.title}</b><small>{task.taskType.replaceAll('_', ' ')} · {taskStatusLabel(task.status)}</small></div><time>{interactionDate(task.completedAt ?? task.dueAt)}</time></article>)}</div></section><div className="form-fields">
                 <label>Responsável<select value={lead.assignedTo ?? ''} onChange={(event) => void save({ assignedTo: event.target.value })} disabled={saving}><option value="">Sem responsável</option><option>Guilherme Maschio</option><option>Time Comercial</option></select></label>
-                <label>Etapa<select value={lead.stage} onChange={(event) => void changeStage(event.target.value)} disabled={saving}>{stages.map((item) => <option key={item} value={item}>{stageLabel(item)}</option>)}</select></label>
+                <label>Etapa do funil<small className="field-help">Atualize quando a negociação avançar.</small><select value={lead.stage} onChange={(event) => void changeStage(event.target.value)} disabled={saving}>{stages.map((item) => <option key={item} value={item}>{stageLabel(item)}</option>)}</select></label>
                 <label>Potencial em negociação<input type="number" value={lead.estimatedValue ?? ''} onChange={(event) => setLead({ ...lead, estimatedValue: event.target.value === '' ? undefined : Number(event.target.value) })} onBlur={(event) => void save({ estimatedValue: event.target.value === '' ? undefined : Number(event.target.value) })} disabled={saving} /></label>
                 <label>Valor realizado<input type="number" value={lead.actualValue ?? ''} onChange={(event) => setLead({ ...lead, actualValue: event.target.value === '' ? undefined : Number(event.target.value) })} onBlur={(event) => void save({ actualValue: event.target.value === '' ? undefined : Number(event.target.value) })} disabled={saving} /></label>
                 {lead.stage === 'LOST' && <label className="full-width">Motivo de perda<input value={lead.lostReason ?? ''} onChange={(event) => setLead({ ...lead, lostReason: event.target.value })} onBlur={(event) => void save({ lostReason: event.target.value })} disabled={saving} /></label>}
@@ -546,28 +742,29 @@ export default function App() {
           </>}
         </section>
         {conversationOpen && <button className="conversation-scrim" onClick={() => setConversationOpen(false)} aria-label="Fechar painel de atendimento" />}
-      </div>
+      </div>}
       </>}
 
       {view === 'tasks' && <section className="tasks-view" aria-busy={tasksLoading}>
         {tasksError && <div className="report-state report-error"><p>{tasksError}</p><button className="retry" onClick={() => void loadTasks()}>Tentar novamente</button></div>}
         {!tasksError && <div className="task-columns">
-          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Compartilhada</p><h2>Disponíveis</h2></div><span>{availableTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && availableTasks.length === 0 && <p className="report-empty">Nenhuma tarefa aguardando atendimento.</p>}{availableTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><p>{task.leadName}</p>{task.note && <small>{task.note}</small>}<button className="ai-save" onClick={() => void updateTask(task,'claim')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Assumindo...' : 'Assumir tarefa'}</button></article>)}</section>
-          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Minha carteira</p><h2>Em andamento</h2></div><span>{myTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && myTasks.length === 0 && <p className="report-empty">Você não possui tarefas assumidas.</p>}{myTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><p>{task.leadName}</p>{task.reservationExpiresAt && <small>Reserva até {interactionDate(task.reservationExpiresAt)}</small>}<div className="task-actions"><button className="secondary" onClick={() => void updateTask(task,'snooze')} disabled={taskUpdatingId === task.id}>Adiar 1h</button><button className="secondary" onClick={() => void updateTask(task,'release')} disabled={taskUpdatingId === task.id}>Liberar</button><button className="ai-save" onClick={() => void updateTask(task,'complete')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Salvando...' : 'Concluir'}</button></div></article>)}</section>
+          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Compartilhada</p><h2>Disponíveis</h2></div><span>{availableTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && availableTasks.length === 0 && <p className="report-empty">Nenhuma tarefa aguardando atendimento.</p>}{availableTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><button className="task-lead-link" onClick={() => void openTaskLead(task)} aria-label={`Abrir lead ${task.leadName}`}><span>Lead</span><b>{task.leadName}</b><i>→</i></button>{task.note && <small>{task.note}</small>}<button className="ai-save" onClick={() => void updateTask(task,'claim')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Assumindo...' : 'Assumir tarefa'}</button></article>)}</section>
+          <section className="report-panel"><div className="report-panel-heading"><div><p className="section-kicker">Minha carteira</p><h2>Em andamento</h2></div><span>{myTasks.length}</span></div>{tasksLoading && <p className="report-empty">Carregando tarefas...</p>}{!tasksLoading && myTasks.length === 0 && <p className="report-empty">Você não possui tarefas assumidas.</p>}{myTasks.map((task) => <article className={`task-card priority-${task.priority.toLowerCase()}`} key={task.id}><div><span className="task-type">{task.taskType.replaceAll('_',' ')}</span><time>{interactionDate(task.dueAt)}</time></div><h3>{task.title}</h3><button className="task-lead-link" onClick={() => void openTaskLead(task)} aria-label={`Abrir lead ${task.leadName}`}><span>Lead</span><b>{task.leadName}</b><i>→</i></button>{task.reservationExpiresAt && <small>Reserva até {interactionDate(task.reservationExpiresAt)}</small>}<div className="task-actions"><button className="secondary" onClick={() => void updateTask(task,'snooze')} disabled={taskUpdatingId === task.id}>Adiar 1h</button><button className="secondary" onClick={() => void updateTask(task,'release')} disabled={taskUpdatingId === task.id}>Liberar</button><button className="ai-save" onClick={() => void updateTask(task,'complete')} disabled={taskUpdatingId === task.id}>{taskUpdatingId === task.id ? 'Salvando...' : 'Concluir'}</button></div></article>)}</section>
         </div>}
       </section>}
 
-      {view === 'cadences' && <section className="cadence-view" aria-busy={cadenceLoading}>
+      {canManageCadences() && view === 'cadences' && <section className="cadence-view" aria-busy={cadenceLoading}>
         {cadenceError && <div className="report-state report-error"><p>{cadenceError}</p><button className="retry" onClick={() => void loadCadences()}>Tentar novamente</button></div>}
         {!cadenceError && <section className="report-panel cadence-editor">
-          <div className="report-panel-heading"><div><p className="section-kicker">Playbook</p><h2>Etapas de acompanhamento</h2></div><div className="cadence-header-actions"><button className="secondary" onClick={() => editPlaybook()}>Novo playbook</button><button onClick={() => void loadCadences()} aria-label="Atualizar playbooks">↻</button></div></div>
+          <div className="report-panel-heading"><div><p className="section-kicker">Automação comercial</p><h2>Cadências de acompanhamento</h2><p className="cadence-heading-help">Defina quando a equipe deve retomar o contato. Cada etapa cria uma tarefa vinculada ao lead na fila compartilhada.</p></div><div className="cadence-header-actions"><button className="secondary" onClick={() => editPlaybook()}>Novo playbook</button><button className="secondary cadence-refresh" onClick={() => void loadCadences()} disabled={cadenceLoading}>↻ Atualizar</button></div></div><section className="cadence-guide" aria-label="Como funcionam as cadências"><div><b>1. Escolha o contexto</b><span>Um playbook pode atender uma categoria de produto ou servir como padrão.</span></div><div><b>2. Planeje os contatos</b><span>As etapas determinam o prazo e a ação que entram na fila do time.</span></div><div><b>3. Acompanhe o lead</b><span>Abra a tarefa para ver o lead e registrar a evolução da negociação.</span></div></section><label className="automatic-enrollment"><input type="checkbox" checked={automaticEnrollment} disabled={automaticEnrollmentSaving} onChange={(event) => void saveAutomaticEnrollment(event.target.checked)} /><span><b>Iniciar automaticamente para novos leads</b><small>Usa o playbook da categoria do lead; se não houver, usa o padrão.</small></span></label>
           {playbookFormOpen && <section className="playbook-form"><label>Nome<input value={playbookForm.name} onChange={(event) => setPlaybookForm({...playbookForm,name:event.target.value})} placeholder="Ex.: Venda consultiva" /></label><label>Categorias<input value={playbookForm.categories} onChange={(event) => setPlaybookForm({...playbookForm,categories:event.target.value})} placeholder="Ex.: Imóveis, financiamento" /></label><label className="full-width">Descrição<input value={playbookForm.description} onChange={(event) => setPlaybookForm({...playbookForm,description:event.target.value})} placeholder="Quando este playbook deve ser usado" /></label><label className="playbook-check"><input type="checkbox" checked={playbookForm.active} onChange={(event) => setPlaybookForm({...playbookForm,active:event.target.checked})} /> Ativo</label><label className="playbook-check"><input type="checkbox" checked={playbookForm.defaultPlaybook} onChange={(event) => setPlaybookForm({...playbookForm,defaultPlaybook:event.target.checked})} /> Playbook padrão</label><div className="playbook-form-actions"><button className="secondary" onClick={() => setPlaybookFormOpen(false)}>Cancelar</button><button className="ai-save" onClick={() => void savePlaybook()} disabled={playbookSaving || !playbookForm.name.trim()}>{playbookSaving ? 'Salvando...' : 'Salvar playbook'}</button></div></section>}
           {playbooks.length === 0 && !cadenceLoading && <p className="report-empty">Crie um playbook no backend antes de configurar a cadência.</p>}
           {playbooks.length > 0 && <>
-            <div className="playbook-select"><label>Playbook comercial<select value={selectedPlaybookId} onChange={(event) => void selectPlaybook(event.target.value)} disabled={cadenceLoading || cadenceSaving}>{playbooks.map((playbook) => <option key={playbook.id} value={playbook.id}>{playbook.name}{playbook.defaultPlaybook ? ' — padrão' : ''}</option>)}</select></label><button className="secondary" onClick={() => editPlaybook(playbooks.find((playbook) => playbook.id === selectedPlaybookId))}>Editar playbook</button></div>
-            <p className="field-help">Cada etapa cria uma tarefa na fila compartilhada após o intervalo informado desde a etapa anterior.</p>
-            <div className="cadence-step-list">{cadenceSteps.map((step, index) => <article className="cadence-step" key={step.id ?? index}><b>{index + 1}</b><div className="cadence-step-fields"><label>Após (minutos)<input type="number" min="0" value={step.delayMinutes} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, delayMinutes:Number(event.target.value)} : item))} /></label><label>Tipo<select value={step.taskType} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, taskType:event.target.value} : item))}><option value="FOLLOW_UP">Follow-up</option><option value="WHATSAPP_REPLY">Responder WhatsApp</option><option value="CALL">Ligação</option><option value="SEND_PROPOSAL">Enviar proposta</option><option value="SCHEDULE_MEETING">Agendar reunião</option><option value="REACTIVATE">Reativar</option><option value="OTHER">Outro</option></select></label><label>Prioridade<select value={step.priority} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, priority:event.target.value} : item))}><option value="LOW">Baixa</option><option value="NORMAL">Normal</option><option value="HIGH">Alta</option><option value="URGENT">Urgente</option></select></label><label className="full-width">Tarefa<input value={step.title} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, title:event.target.value} : item))} placeholder="Ex.: Retomar conversa pelo WhatsApp" /></label><label className="full-width">Orientação opcional<input value={step.note ?? ''} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, note:event.target.value} : item))} placeholder="Contexto para quem atender a tarefa" /></label></div><button className="product-delete" onClick={() => setCadenceSteps((items) => items.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover etapa ${index + 1}`}>Remover</button></article>)}</div>
-            <div className="cadence-actions"><button className="secondary" onClick={() => setCadenceSteps((items) => [...items, {position:items.length + 1, delayMinutes:1440, title:'Retomar conversa', taskType:'FOLLOW_UP', priority:'NORMAL'}])}>Adicionar etapa</button><button className="ai-save" onClick={() => void saveCadenceSteps()} disabled={cadenceSaving || cadenceSteps.some((step) => !step.title.trim())}>{cadenceSaving ? 'Salvando...' : 'Salvar etapas'}</button></div>
+            <div className="playbook-select"><div className="playbook-select-field"><label>1. Playbook que define esta sequência<select value={selectedPlaybookId} onChange={(event) => void selectPlaybook(event.target.value)} disabled={cadenceLoading || cadenceSaving}>{playbooks.map((playbook) => <option key={playbook.id} value={playbook.id}>{playbook.name}{playbook.defaultPlaybook ? ' — padrão' : ''}</option>)}</select></label><small>O playbook determina quais etapas serão usadas nos leads compatíveis com ele.</small></div><button className="secondary" onClick={() => editPlaybook(playbooks.find((playbook) => playbook.id === selectedPlaybookId))}>Editar playbook</button></div>
+            <section className="selected-playbook-context" aria-live="polite"><p>Playbook selecionado</p><div><span>Você está configurando a cadência de</span><b>{playbooks.find((playbook) => playbook.id === selectedPlaybookId)?.name ?? 'este playbook'}</b></div><small>Salvar aqui altera somente este playbook. Os demais mantêm suas próprias sequências.</small></section>
+            <section className="cadence-steps-section"><header><p className="section-kicker">Etapas do playbook</p><h3>Cadência de acompanhamento</h3><p>Defina os próximos contatos que este playbook cria para cada lead.</p></header><p className="field-help cadence-steps-intro"><b>Como funciona</b> O prazo é contado desde o início da cadência ou desde a etapa anterior. Quando chegar a hora, a tarefa aparece na Fila de tarefas do lead.</p>
+            <div className="cadence-step-list">{cadenceSteps.map((step, index) => <article className="cadence-step" key={step.id ?? index}><b>{index + 1}</b><div className="cadence-step-fields"><label>Quando criar?<input type="number" min="0" value={step.delayMinutes} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, delayMinutes:Number(event.target.value)} : item))} /><small>Minutos após a etapa anterior</small></label><label>Como agir?<select value={step.taskType} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, taskType:event.target.value} : item))}><option value="FOLLOW_UP">Follow-up</option><option value="WHATSAPP_REPLY">Responder WhatsApp</option><option value="CALL">Ligação</option><option value="SEND_PROPOSAL">Enviar proposta</option><option value="SCHEDULE_MEETING">Agendar reunião</option><option value="REACTIVATE">Reativar</option><option value="OTHER">Outro</option></select></label><label>Prioridade<select value={step.priority} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, priority:event.target.value} : item))}><option value="LOW">Baixa</option><option value="NORMAL">Normal</option><option value="HIGH">Alta</option><option value="URGENT">Urgente</option></select></label><label className="full-width">Título visível na fila<input value={step.title} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, title:event.target.value} : item))} placeholder="Ex.: Retomar conversa pelo WhatsApp" /></label><label className="full-width">Instrução para quem atender (opcional)<input value={step.note ?? ''} onChange={(event) => setCadenceSteps((items) => items.map((item, itemIndex) => itemIndex === index ? {...item, note:event.target.value} : item))} placeholder="Ex.: confirme o interesse e proponha um horário para conversar" /></label></div><button className="product-delete" onClick={() => setCadenceSteps((items) => items.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover etapa ${index + 1}`}>Remover</button></article>)}</div>
+            <div className="cadence-actions"><button className="secondary" onClick={() => setCadenceSteps((items) => [...items, {position:items.length + 1, delayMinutes:1440, title:'Retomar conversa', taskType:'FOLLOW_UP', priority:'NORMAL'}])}>Adicionar próximo contato</button><button className="ai-save" onClick={() => void saveCadenceSteps()} disabled={cadenceSaving || cadenceSteps.some((step) => !step.title.trim())}>{cadenceSaving ? 'Salvando...' : 'Salvar sequência'}</button></div></section>
           </>}
         </section>}
       </section>}
@@ -580,11 +777,39 @@ export default function App() {
         {!productsLoading && !productsError && <section className="report-panel products-table"><div className="products-table-head"><span>Produto</span><span>Estoque disponível</span><span>Mínimo</span><span>Preço</span><span /></div>{products.length === 0 ? <p className="report-empty">Ainda não há produtos cadastrados para esta empresa.</p> : products.map((product) => <article key={product.id} className={product.lowStock ? 'low-stock' : ''}><div className="product-identity">{productImageUrls[product.id] ? <img className="product-thumbnail" src={productImageUrls[product.id]} alt="" /> : <span className="product-thumbnail product-thumbnail-empty" aria-hidden="true">▣</span>}<div><b>{product.title}</b><small>{product.sku} · {product.category}</small></div></div><strong>{product.availableQuantity}</strong><span>{product.reorderPoint}</span><span>{formatCurrency(product.price)}</span><button className="product-delete" onClick={() => void archiveProduct(product)}>Excluir</button></article>)}</section>}
       </section>}
 
-      {view === 'reports' && <section className="reports-view" aria-busy={reportLoading}>
+      {isAdministrator() && view === 'billing' && <section className="billing-view" aria-busy={billingLoading}>
+        <section className="billing-hero">
+          <div><p className="section-kicker">Crescimento com previsibilidade</p><h2>Seu plano acompanha a operação</h2><p>Escolha como o AnySale apoia sua equipe. O pagamento acontece no ambiente seguro do Asaas; a liberação da assinatura é confirmada automaticamente.</p></div>
+          <div className={`billing-status billing-status-${billingSubscription?.accessStatus?.toLowerCase() ?? 'loading'}`}>
+            <span>{billingSubscription?.accessStatus === 'ACTIVE' ? '●' : '○'}</span><div><b>{billingSubscription?.accessStatus === 'ACTIVE' ? 'Acesso ativo' : billingSubscription?.status === 'CHECKOUT_PENDING' ? 'Pagamento pendente' : 'Plano não configurado'}</b><small>{billingSubscription?.planCode ? `Plano ${billingSubscription.planCode}` : 'Escolha um plano para começar'}</small></div>
+          </div>
+        </section>
+
+        {billingReturn && <section className={`billing-return billing-return-${billingReturn}`} role="status"><div><b>{billingReturn === 'success' ? 'Recebemos o retorno do pagamento' : billingReturn === 'cancelled' ? 'O pagamento foi cancelado' : 'O link de pagamento expirou'}</b><p>{billingReturn === 'success' ? 'Estamos confirmando a assinatura com o Asaas. Esta tela será atualizada assim que o webhook for processado.' : billingReturn === 'cancelled' ? 'Nenhuma cobrança foi realizada. Quando estiver pronto, escolha um plano novamente.' : 'Nenhuma cobrança foi realizada. Escolha um plano para gerar um novo link seguro.'}</p></div><div><button className="secondary" onClick={() => void loadBilling()} disabled={billingLoading}>Atualizar situação</button><button className="billing-return-dismiss" onClick={dismissBillingReturn} aria-label="Fechar aviso de pagamento">×</button></div></section>}
+
+        {billingLoading && <div className="report-state">Carregando planos e assinatura...</div>}
+        {!billingLoading && billingError && <div className="report-state report-error"><p>{billingError}</p><button className="retry" onClick={() => void loadBilling()}>Tentar novamente</button></div>}
+        {!billingLoading && !billingError && <>
+          {billingSubscription?.planCode && <section className="billing-current panel"><div><div><p className="section-kicker">Plano atual</p><h3>{billingPlans.find((plan) => plan.code === billingSubscription.planCode)?.name ?? billingSubscription.planCode}</h3><p>{billingSubscription.status === 'ACTIVE' ? 'Sua assinatura está ativa e os recursos do seu plano estão liberados.' : billingSubscription.status === 'CHECKOUT_PENDING' ? 'Aguardamos a conclusão do pagamento para ativar os recursos do seu plano.' : 'O último checkout não foi concluído. Você pode escolher um plano e tentar novamente.'}</p></div><div className="billing-current-meta"><span>{billingSubscription.status === 'ACTIVE' ? 'Ativo' : billingSubscription.status === 'CHECKOUT_PENDING' ? 'Em configuração' : 'Ação necessária'}</span>{billingSubscription.trialEndsAt && <small>Primeira cobrança: {interactionDate(billingSubscription.trialEndsAt)}</small>}</div></div></section>}
+          <section className="billing-plans" aria-label="Planos disponíveis"><header><div><p className="section-kicker">Planos</p><h2>Escolha o ritmo da sua operação</h2><p>Comece com 14 dias para validar o processo comercial. A cobrança é mensal e o cartão é informado apenas no Asaas.</p></div></header><div className="billing-plan-grid">{billingPlans.map((plan) => { const selected = billingSubscription?.planCode === plan.code; const custom = !plan.monthlyPriceCents; const checkoutPending = selected && billingSubscription?.status === 'CHECKOUT_PENDING'; const activeSubscription = billingSubscription?.status === 'ACTIVE'; const label = checkoutPlanCode === plan.code ? 'Abrindo pagamento...' : checkoutPending ? 'Pagamento em andamento' : activeSubscription ? selected ? 'Seu plano atual' : 'Alteração de plano em breve' : selected ? 'Escolher novamente' : 'Escolher este plano'; return <article className={`billing-plan ${selected ? 'current' : ''} ${custom ? 'custom' : ''}`} key={plan.code}><div className="billing-plan-header"><p>{selected ? 'Plano atual' : 'AnySale'}</p><h3>{plan.name}</h3><span>{plan.description}</span></div><div className="billing-price"><strong>{formatBillingPrice(plan.monthlyPriceCents)}</strong>{!custom && <span>/ mês</span>}</div><p className="billing-trial">{plan.trialDays} dias de teste · {plan.graceDays} dias de carência</p><ul><li><b>{plan.userLimit ?? '—'}</b> usuários</li><li><b>{plan.monthlyLeadLimit?.toLocaleString('pt-BR') ?? '—'}</b> leads por mês</li><li><b>{plan.monthlyAiRequestLimit?.toLocaleString('pt-BR') ?? '—'}</b> solicitações de IA por mês</li></ul>{custom ? <button className="secondary" disabled>Fale conosco</button> : <button className={selected ? 'secondary' : 'ai-save'} disabled={checkoutPlanCode === plan.code || activeSubscription || checkoutPending} onClick={() => void startCheckout(plan)}>{label}</button>}</article>})}</div></section>
+          <p className="billing-security-note">🔒 O AnySale não armazena dados do seu cartão. A confirmação de pagamento é recebida diretamente do Asaas.</p>
+        </>}
+      </section>}
+
+      {isAdministrator() && view === 'users' && <section className="users-view" aria-busy={usersLoading}>
+        <section className="users-intro"><div><p className="section-kicker">Acesso ao AnySale</p><h2>Quem pode operar a sua equipe</h2><p>As permissões controlam o que cada pessoa pode ver e fazer no Console. A conta é criada no Keycloak e a senha temporária deve ser alterada no primeiro acesso.</p></div><button className="ai-save" onClick={() => openUserForm()}><span>＋</span> Novo usuário</button></section>
+        {userFormOpen && <section className="report-panel user-form"><div className="report-panel-heading"><div><p className="section-kicker">{editingUserId ? 'Atualizar acesso' : 'Novo acesso'}</p><h2>{editingUserId ? 'Editar usuário' : 'Convidar para a operação'}</h2></div><button className="secondary" onClick={() => setUserFormOpen(false)}>Fechar</button></div><div className="form-fields"><label>Nome<input value={userForm.firstName} onChange={(event) => setUserForm({...userForm, firstName:event.target.value})} placeholder="Ex.: Camila" /></label><label>Sobrenome<input value={userForm.lastName} onChange={(event) => setUserForm({...userForm, lastName:event.target.value})} placeholder="Ex.: Rocha" /></label><label>Email corporativo<input type="email" value={userForm.email} onChange={(event) => setUserForm({...userForm, email:event.target.value})} placeholder="nome@empresa.com" /></label><label>Responsabilidade<select value={userForm.role} onChange={(event) => setUserForm({...userForm, role:event.target.value as ManagedUser['role']})}><option value="SALES_AGENT">Vendedor — atende leads e tarefas</option><option value="SALES_MANAGER">Gerente comercial — acompanha a operação</option><option value="ADMIN">Administrador — gerencia configurações e acessos</option></select></label>{!editingUserId && <label className="full-width">Senha temporária<small className="field-help">Informe ao usuário por um canal seguro. Ele será solicitado a trocá-la no primeiro login.</small><input type="password" autoComplete="new-password" value={userForm.temporaryPassword} onChange={(event) => setUserForm({...userForm, temporaryPassword:event.target.value})} placeholder="Mínimo de 8 caracteres" /></label>}{editingUserId && <label className="user-enabled full-width"><input type="checkbox" checked={userForm.enabled} onChange={(event) => setUserForm({...userForm, enabled:event.target.checked})} /><span><b>Usuário ativo</b><small>Desative para bloquear o acesso sem apagar o histórico comercial.</small></span></label>}</div><div className="actions"><button className="secondary" onClick={() => setUserFormOpen(false)}>Cancelar</button><button className="ai-save" disabled={userSaving || !userForm.firstName.trim() || !userForm.lastName.trim() || !userForm.email.trim() || (!editingUserId && userForm.temporaryPassword.length < 8)} onClick={() => void saveUser()}>{userSaving ? 'Salvando...' : editingUserId ? 'Salvar alterações' : 'Criar usuário'}</button></div></section>}
+        {notice && <p className={`notice ${notice.type}`} role="status">{notice.message}</p>}
+        {usersLoading && <div className="report-state">Carregando usuários e permissões...</div>}
+        {!usersLoading && usersError && <div className="report-state report-error"><p>{usersError}</p><button className="retry" onClick={() => void loadUsers()}>Tentar novamente</button></div>}
+        {!usersLoading && !usersError && <section className="report-panel users-table"><div className="users-table-heading"><div><p className="section-kicker">Equipe</p><h2>{managedUsers.length} {managedUsers.length === 1 ? 'usuário com acesso' : 'usuários com acesso'}</h2></div><button className="secondary" onClick={() => void loadUsers()}>↻ Atualizar</button></div>{managedUsers.length === 0 ? <div className="users-empty"><b>Nenhuma conta encontrada</b><p>Crie o primeiro usuário para montar o time comercial.</p></div> : <div className="users-list">{managedUsers.map((user) => <article key={user.id} className={!user.enabled ? 'is-disabled' : ''}><div className="user-avatar">{`${user.firstName[0] ?? ''}${user.lastName[0] ?? ''}`.toUpperCase() || '?'}</div><div className="user-identity"><b>{user.firstName} {user.lastName}</b><small>{user.email}</small></div><span className={`user-role user-role-${user.role.toLowerCase()}`}>{userRoleLabel(user.role)}</span><span className={`user-status ${user.enabled ? 'active' : ''}`}>{user.enabled ? 'Ativo' : 'Desativado'}</span><div className="user-actions"><button className="secondary" onClick={() => openUserForm(user)}>Editar</button><button className="product-delete" onClick={() => void deleteUser(user)} disabled={userDeletingId === user.id} aria-label={`Excluir ${user.firstName} ${user.lastName}`} title="Excluir usuário">Excluir</button></div></article>)}</div>}</section>}
+      </section>}
+
+      {isAdministrator() && view === 'dashboard' && <section className="reports-view dashboard-reporting" aria-busy={reportLoading}>
         {reportLoading && <div className="report-state">Carregando indicadores comerciais...</div>}
         {!reportLoading && reportError && <div className="report-state report-error"><p>{reportError}</p><button className="retry" onClick={() => void loadReport()}>Tentar novamente</button></div>}
         {!reportLoading && !reportError && funnel && <>
-          <div className="report-updated"><span>Dados reais do funil</span><time>Atualizado em {interactionDate(funnel.generatedAt)}</time><button onClick={() => void loadReport()} aria-label="Atualizar relatórios">↻</button></div>
+          <div className="report-updated"><span>Indicadores comerciais</span><time>Atualizado em {interactionDate(funnel.generatedAt)}</time><button className="secondary" onClick={() => void loadReport()}>↻ Atualizar</button></div>
           <section className="report-kpis" aria-label="Indicadores do funil">
             <article><p>Potencial em negociação</p><strong>{formatCurrency(funnel.estimatedPipelineValue)}</strong><span>{funnel.totalLeads} leads no funil</span></article>
             <article><p>Receita ganha</p><strong>{formatCurrency(funnel.wonRevenue)}</strong><span>{funnel.wonLeads} negócios fechados</span></article>

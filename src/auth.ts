@@ -39,10 +39,18 @@ export function currentUserName(): string {
 }
 
 export function isAdministrator(): boolean {
+  return hasRole('ADMIN')
+}
+
+export function canManageCadences(): boolean {
+  return hasRole('ADMIN') || hasRole('SALES_MANAGER')
+}
+
+function hasRole(expectedRole: string): boolean {
   const token = keycloak.tokenParsed as { realm_access?: { roles?: unknown }, resource_access?: Record<string, { roles?: unknown }> } | undefined
   const realmRoles = Array.isArray(token?.realm_access?.roles) ? token.realm_access.roles : []
   const clientRoles = Array.isArray(token?.resource_access?.['anysale-console']?.roles) ? token.resource_access['anysale-console'].roles : []
-  return [...realmRoles, ...clientRoles].some((role) => typeof role === 'string' && role.toUpperCase() === 'ADMIN')
+  return [...realmRoles, ...clientRoles].some((role) => typeof role === 'string' && role.toUpperCase() === expectedRole)
 }
 
 export default keycloak
