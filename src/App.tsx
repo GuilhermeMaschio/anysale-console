@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, billingApi, cadenceEnrollmentApi, catalogApi, leadCreationApi, leadRoadmapApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type BillingPlan, type BillingSubscription, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadCadenceRoadmap, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
+import { api, billingApi, cadenceEnrollmentApi, catalogApi, leadCreationApi, leadRoadmapApi, userManagementApi, type AiSettings, type AiSkill, type AiUsage, type BillingCheckout, type BillingPlan, type BillingSubscription, type CadenceStep, type Funnel, type Interaction, type LeadApi, type LeadCadence, type LeadCadenceRoadmap, type LeadTask, type ManagedUser, type Product, type SalesPlaybook } from './api'
 import keycloak, { canManageCadences, currentUserName, isAdministrator, signIn, signOut } from './auth'
 import './App.css'
 import './Cadence.css'
@@ -180,6 +180,7 @@ export default function App() {
   const [userForm, setUserForm] = useState({firstName:'', lastName:'', email:'', temporaryPassword:'', role:'SALES_AGENT', enabled:true})
   const [billingPlans, setBillingPlans] = useState<BillingPlan[]>([])
   const [billingSubscription, setBillingSubscription] = useState<BillingSubscription>()
+  const [resumableCheckout, setResumableCheckout] = useState<BillingCheckout>()
   const [billingLoading, setBillingLoading] = useState(false)
   const [billingError, setBillingError] = useState('')
   const [checkoutPlanCode, setCheckoutPlanCode] = useState('')
@@ -377,8 +378,8 @@ export default function App() {
   const loadBilling = async () => {
     setBillingLoading(true); setBillingError('')
     try {
-      const [plans, subscription] = await Promise.all([billingApi.plans(), billingApi.subscription()])
-      setBillingPlans(plans); setBillingSubscription(subscription)
+      const [plans, subscription, pendingCheckout] = await Promise.all([billingApi.plans(), billingApi.subscription(), billingApi.pendingCheckout()])
+      setBillingPlans(plans); setBillingSubscription(subscription); setResumableCheckout(pendingCheckout)
     } catch (error) { setBillingError(errorMessage(error, 'Não foi possível carregar a assinatura')) }
     finally { setBillingLoading(false) }
   }
@@ -391,6 +392,9 @@ export default function App() {
       window.location.assign(checkout.checkoutUrl)
     } catch (error) { setBillingError(errorMessage(error, 'Não foi possível iniciar o pagamento seguro')) }
     finally { setCheckoutPlanCode('') }
+  }
+  const resumeCheckout = () => {
+    if (resumableCheckout) window.location.assign(resumableCheckout.checkoutUrl)
   }
 
   const dismissBillingReturn = () => {
@@ -791,6 +795,7 @@ export default function App() {
         {!billingLoading && billingError && <div className="report-state report-error"><p>{billingError}</p><button className="retry" onClick={() => void loadBilling()}>Tentar novamente</button></div>}
         {!billingLoading && !billingError && <>
           {billingSubscription?.planCode && <section className="billing-current panel"><div><div><p className="section-kicker">Plano atual</p><h3>{billingPlans.find((plan) => plan.code === billingSubscription.planCode)?.name ?? billingSubscription.planCode}</h3><p>{billingSubscription.status === 'ACTIVE' ? 'Sua assinatura está ativa e os recursos do seu plano estão liberados.' : billingSubscription.status === 'CHECKOUT_PENDING' ? 'Aguardamos a conclusão do pagamento para ativar os recursos do seu plano.' : 'O último checkout não foi concluído. Você pode escolher um plano e tentar novamente.'}</p></div><div className="billing-current-meta"><span>{billingSubscription.status === 'ACTIVE' ? 'Ativo' : billingSubscription.status === 'CHECKOUT_PENDING' ? 'Em configuração' : 'Ação necessária'}</span>{billingSubscription.trialEndsAt && <small>Primeira cobrança: {interactionDate(billingSubscription.trialEndsAt)}</small>}</div></div></section>}
+          {billingSubscription?.status === 'CHECKOUT_PENDING' && resumableCheckout && <section className="billing-resume panel"><div><div><p className="section-kicker">Configuração em andamento</p><h3>Retome de onde parou</h3><p>Seu link de pagamento continua disponível. Retome o checkout sem criar uma nova cobrança.</p></div><button className="ai-save" onClick={resumeCheckout}>Retomar pagamento <span>→</span></button></div></section>}
           <section className="billing-plans" aria-label="Planos disponíveis"><header><div><p className="section-kicker">Planos</p><h2>Escolha o ritmo da sua operação</h2><p>Comece com 14 dias para validar o processo comercial. A cobrança é mensal e o cartão é informado apenas no Asaas.</p></div></header><div className="billing-plan-grid">{billingPlans.map((plan) => { const selected = billingSubscription?.planCode === plan.code; const custom = !plan.monthlyPriceCents; const checkoutPending = selected && billingSubscription?.status === 'CHECKOUT_PENDING'; const activeSubscription = billingSubscription?.status === 'ACTIVE'; const label = checkoutPlanCode === plan.code ? 'Abrindo pagamento...' : checkoutPending ? 'Pagamento em andamento' : activeSubscription ? selected ? 'Seu plano atual' : 'Alteração de plano em breve' : selected ? 'Escolher novamente' : 'Escolher este plano'; return <article className={`billing-plan ${selected ? 'current' : ''} ${custom ? 'custom' : ''}`} key={plan.code}><div className="billing-plan-header"><p>{selected ? 'Plano atual' : 'AnySale'}</p><h3>{plan.name}</h3><span>{plan.description}</span></div><div className="billing-price"><strong>{formatBillingPrice(plan.monthlyPriceCents)}</strong>{!custom && <span>/ mês</span>}</div><p className="billing-trial">{plan.trialDays} dias de teste · {plan.graceDays} dias de carência</p><ul><li><b>{plan.userLimit ?? '—'}</b> usuários</li><li><b>{plan.monthlyLeadLimit?.toLocaleString('pt-BR') ?? '—'}</b> leads por mês</li><li><b>{plan.monthlyAiRequestLimit?.toLocaleString('pt-BR') ?? '—'}</b> solicitações de IA por mês</li></ul>{custom ? <button className="secondary" disabled>Fale conosco</button> : <button className={selected ? 'secondary' : 'ai-save'} disabled={checkoutPlanCode === plan.code || activeSubscription || checkoutPending} onClick={() => void startCheckout(plan)}>{label}</button>}</article>})}</div></section>
           <p className="billing-security-note">🔒 O AnySale não armazena dados do seu cartão. A confirmação de pagamento é recebida diretamente do Asaas.</p>
         </>}

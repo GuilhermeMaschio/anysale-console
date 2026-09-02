@@ -63,5 +63,6 @@ export const catalogApi = {
 export const billingApi = {
   plans: () => requestFrom<BillingPlan[]>(billingBaseUrl, '/v1/billing/plans'),
   subscription: () => requestFrom<BillingSubscription>(billingBaseUrl, '/v1/billing/subscription'),
+  pendingCheckout: () => requestFrom<BillingCheckout | undefined>(billingBaseUrl, '/v1/billing/checkout/pending'),
   checkout: (planCode:string) => requestFrom<BillingCheckout>(billingBaseUrl, '/v1/billing/checkout', { method:'POST', body:JSON.stringify({planCode}) }),
 }
